@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["shader-slang-src", "shader-slang-dev"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/amejia1/shader-slang-dev"
+keywords = ["slang", "shader", "gpu", "build"]
+categories = ["development-tools::build-utils"]

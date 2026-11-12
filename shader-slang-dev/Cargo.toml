@@ -1,0 +1,13 @@
+[package]
+name = "shader-slang-dev"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Locate the shader-slang binaries and libraries built by shader-slang-src"
+readme = "README.md"
+
+[dependencies]
+shader-slang-src = { version = "0.1.0", path = "../shader-slang-src" }

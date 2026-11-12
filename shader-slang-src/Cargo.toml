@@ -1,0 +1,18 @@
+[package]
+name = "shader-slang-src"
+version = "0.1.0+2026.21"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Build the shader-slang compiler toolchain (slangc and friends) from source"
+build = "build.rs"
+readme = "README.md"
+
+# This crate vendors the shader-slang source as a git submodule at `slang/`.
+# When the submodule is unavailable (a crates.io tarball or a cargo git
+# dependency), build.rs clones the pinned release tag instead. No
+# build-dependencies are required: the build drives `git` and `cmake` directly.
+
+[dependencies]
