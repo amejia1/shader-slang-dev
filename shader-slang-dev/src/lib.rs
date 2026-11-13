@@ -142,13 +142,43 @@ mod tests {
             .unwrap_or_else(|e| panic!("directory is not readable ({}): {e}", path.display()));
     }
 
+    /// Recursively list every file under the collected artifact directories
+    /// (`bin/`, `lib/`, `include/`), one per line. Makes a missing-file
+    /// failure self-describing: the panic message shows exactly what the
+    /// build actually produced.
+    fn list_artifact_files() -> String {
+        let mut files = Vec::new();
+        let mut stack = vec![bin_dir(), lib_dir(), include_dir()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    files.push(path);
+                }
+            }
+        }
+        files.sort();
+        files
+            .iter()
+            .map(|p| format!("  {}\n", p.display()))
+            .collect()
+    }
+
     /// Assert that `path` is an existing, readable file.
     fn assert_readable_file(path: &Path) {
-        assert!(
-            path.is_file(),
-            "expected an existing file, got: {}",
-            path.display()
-        );
+        if !path.is_file() {
+            panic!(
+                "expected an existing file, got: {}\nfiles under {}:\n{}",
+                path.display(),
+                artifact_root().display(),
+                list_artifact_files()
+            );
+        }
         fs::File::open(path)
             .unwrap_or_else(|e| panic!("file is not readable ({}): {e}", path.display()));
     }

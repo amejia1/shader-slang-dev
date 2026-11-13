@@ -179,6 +179,13 @@ fn build_slang(
         .arg("-DSLANG_ENABLE_SLANG_RHI=OFF")
         .arg("-DSLANG_ENABLE_GFX=OFF")
         .arg("-DSLANG_ENABLE_SLANG_GLSLANG=ON")
+        // Pin the version from this crate's own metadata. Slang otherwise
+        // derives it from git tags, which shallow checkouts (as used by CI)
+        // do not carry; without a tag it falls back to 0.0.0 and the
+        // versioned plugin file names would not match what the crate
+        // promises.
+        .arg(format!("-DSLANG_VERSION_NUMERIC={}", slang_version()))
+        .arg(format!("-DSLANG_VERSION_FULL={}", slang_version()))
         .status()
         .expect("failed to run cmake");
     if !status.success() {
@@ -233,14 +240,17 @@ fn build_slang(
     fs::create_dir_all(lib_dir).expect("failed to create lib dir");
     copy_libraries(&build_dir, &build_bin_dir, lib_dir);
 
-    // The glslang plugin is the backend `slangc` needs for GLSL/HLSL source
-    // compilation. Fail loudly here instead of at test time if a build layout
-    // change moved it somewhere the copy above did not reach.
-    if !has_glslang_plugin(lib_dir) {
-        panic!(
-            "slang build did not produce a slang-glslang plugin library in {}",
-            lib_dir.display()
-        );
+    // The runtime-loaded plugins are the backends `slangc` needs (glslang for
+    // SPIR-V-via-GLSL, glsl-module for GLSL source). Fail loudly here instead
+    // of at test time if a build layout change moved one somewhere the copy
+    // above did not reach.
+    for plugin in ["slang-glslang", "slang-glsl-module"] {
+        if !has_plugin(lib_dir, plugin) {
+            panic!(
+                "slang build did not produce the `{plugin}` plugin library in {}",
+                lib_dir.display()
+            );
+        }
     }
 
     // Copy the public headers (`slang.h`, ...) for consumers that compile
@@ -255,6 +265,9 @@ fn build_slang(
             }
         }
     }
+
+    // Show exactly what this build collected (see `list_out_dir`).
+    list_out_dir(out_dir, bin_dir, lib_dir, include_dir);
 
     // Smoke check: the installed slangc must run.
     let status = Command::new(bin_dir.join(exe("slangc")))
@@ -321,13 +334,16 @@ fn copy_libraries(build_dir: &Path, build_bin_dir: &Path, lib_dir: &Path) {
         }
     }
 
-    // The plugin is emitted by its own CMake target and can land outside the
-    // directory copied above; sweep for it explicitly so it is never lost.
-    if !has_glslang_plugin(lib_dir) {
-        for path in find_files(build_dir, &["so", "dylib", "dll"]) {
-            let name = path.file_name().unwrap().to_string_lossy();
-            if name.contains("slang-glslang") {
-                copy(&path, &lib_dir.join(path.file_name().unwrap()));
+    // The plugins are emitted by their own CMake targets and can land outside
+    // the directory copied above; sweep for each one explicitly so none is
+    // lost.
+    for plugin in ["slang-glslang", "slang-glsl-module"] {
+        if !has_plugin(lib_dir, plugin) {
+            for path in find_files(build_dir, &["so", "dylib", "dll"]) {
+                let name = path.file_name().unwrap().to_string_lossy();
+                if name.contains(plugin) {
+                    copy(&path, &lib_dir.join(path.file_name().unwrap()));
+                }
             }
         }
     }
@@ -345,19 +361,60 @@ fn copy_dir_files(src_dir: &Path, dst_dir: &Path) {
     }
 }
 
-/// Whether `lib_dir` contains the shared glslang backend plugin.
-fn has_glslang_plugin(lib_dir: &Path) -> bool {
+/// Whether `lib_dir` contains a shared plugin whose file name contains
+/// `needle`.
+fn has_plugin(lib_dir: &Path, needle: &str) -> bool {
     let Ok(entries) = fs::read_dir(lib_dir) else {
         return false;
     };
     for entry in entries.flatten() {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name.contains("slang-glslang") && has_ext(&path, &["so", "dylib", "dll", "lib"]) {
+        if name.contains(needle) && has_ext(&path, &["so", "dylib", "dll", "lib"]) {
             return true;
         }
     }
     false
+}
+
+/// Recursively collect every file under `dir`, sorted.
+fn collect_files(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(next) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&next) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Print the complete recursive file list of the collected artifacts.
+///
+/// Cargo records build-script stdout in
+/// `target/<profile>/build/shader-slang-src-*/output`, so a later
+/// "missing file" failure can be compared against exactly what this build
+/// collected. The CMake tree and the source clone are not artifacts and are
+/// not listed.
+fn list_out_dir(out_dir: &Path, bin_dir: &Path, lib_dir: &Path, include_dir: &Path) {
+    println!(
+        "shader-slang-src: collected files under {}:",
+        out_dir.display()
+    );
+    for dir in [bin_dir, lib_dir, include_dir] {
+        for path in collect_files(dir) {
+            println!("  {}", path.display());
+        }
+    }
 }
 
 /// Recursively search `dir` for a file with the exact `name`.
