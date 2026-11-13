@@ -108,12 +108,12 @@ pub fn standard_module_dir() -> PathBuf {
 
 /// Path to the shared `glslang` backend plugin the binaries dlopen at runtime.
 pub fn lib_slang_glslang() -> PathBuf {
-    shared_lib("slang-glslang")
+    shared_plugin("slang-glslang")
 }
 
 /// Path to the shared `glsl-module` backend plugin.
 pub fn lib_slang_glsl_module() -> PathBuf {
-    shared_lib("slang-glsl-module")
+    shared_plugin("slang-glsl-module")
 }
 
 fn exe_name(name: &str) -> String {
@@ -132,17 +132,19 @@ fn static_lib(name: &str) -> PathBuf {
     })
 }
 
-/// Slang version-suffixes the runtime-loaded module file names on
-/// non-Windows platforms only, and uses the `.dylib` extension on macOS
-/// (see slang's `source/slang-glslang/CMakeLists.txt`).
-fn shared_lib(name: &str) -> PathBuf {
-    lib_dir().join(if cfg!(windows) {
-        format!("{name}.dll")
+/// Slang version-suffixes the runtime-loaded plugin file names on non-Windows
+/// platforms only, and uses the `.dylib` extension on macOS (see slang's
+/// `source/slang-glslang/CMakeLists.txt`). On Windows the plugins are .dll
+/// files emitted beside the executables, which slangc resolves through the
+/// default loader search (starting in the executable's directory).
+fn shared_plugin(name: &str) -> PathBuf {
+    if cfg!(windows) {
+        bin_dir().join(format!("{name}.dll"))
     } else if cfg!(target_os = "macos") {
-        format!("lib{name}-{SLANG_VERSION}.dylib")
+        lib_dir().join(format!("lib{name}-{SLANG_VERSION}.dylib"))
     } else {
-        format!("lib{name}-{SLANG_VERSION}.so")
-    })
+        lib_dir().join(format!("lib{name}-{SLANG_VERSION}.so"))
+    }
 }
 
 #[cfg(test)]

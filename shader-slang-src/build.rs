@@ -192,18 +192,27 @@ fn build_slang(
         panic!("cmake configure of slang failed");
     }
 
-    let mut build = Command::new("cmake");
-    build
-        .arg("--build")
-        .arg(&build_dir)
-        .arg("--config")
-        .arg("Release");
-    // `--parallel` is not meaningful for the Visual Studio generator; the
-    // best-effort Windows path omits it and lets MSBuild pick the default.
-    if !cfg!(windows) {
-        build.arg("--parallel").arg(&jobs);
-    }
-    let status = build.status().expect("failed to run cmake --build");
+    let run_build = || -> std::process::ExitStatus {
+        let mut build = Command::new("cmake");
+        build
+            .arg("--build")
+            .arg(&build_dir)
+            .arg("--config")
+            .arg("Release");
+        // `--parallel` is not meaningful for the Visual Studio generator; the
+        // best-effort Windows path omits it and lets MSBuild pick the default.
+        if !cfg!(windows) {
+            build.arg("--parallel").arg(&jobs);
+        }
+        build.status().expect("failed to run cmake --build")
+    };
+
+    let status = run_build();
+    // The dxc sub-build (an old LLVM snapshot with its own makefiles) has
+    // parallel-build races observed on macOS (duplicate ar invocations,
+    // missing tablegen headers); an incremental retry resumes where the
+    // failed run left off and recovers from them.
+    let status = if status.success() { status } else { run_build() };
     if !status.success() {
         panic!("cmake build of slang failed");
     }
@@ -240,15 +249,52 @@ fn build_slang(
     fs::create_dir_all(lib_dir).expect("failed to create lib dir");
     copy_libraries(&build_dir, &build_bin_dir, lib_dir);
 
-    // The runtime-loaded plugins are the backends `slangc` needs (glslang for
-    // SPIR-V-via-GLSL, glsl-module for GLSL source). Fail loudly here instead
-    // of at test time if a build layout change moved one somewhere the copy
-    // above did not reach.
+    // On Windows the shared plugins (and the other runtime DLLs, e.g.
+    // dxcompiler) are emitted beside the executables; their import .lib
+    // files were collected into lib/ above. slangc resolves them through the
+    // default loader search, which starts in the executable's directory, so
+    // they must sit in the artifact bin/ as well.
+    if cfg!(windows) {
+        let Ok(entries) = fs::read_dir(&build_bin_dir) else {
+            panic!(
+                "failed to read build bin dir {}",
+                build_bin_dir.display()
+            );
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if has_ext(&path, &["dll"]) {
+                copy(&path, &bin_dir.join(path.file_name().unwrap()));
+            }
+        }
+    }
+
+    // The runtime-loaded plugins are the backends `slangc` needs (glslang
+    // for SPIR-V-via-GLSL, glsl-module for GLSL source). On Windows the
+    // plugin is a .dll in bin/ (the import .lib in lib/ does not count);
+    // on other platforms it is a shared library in lib/. Fail loudly here
+    // instead of at test time if a build layout change moved one somewhere
+    // the copies above did not reach.
     for plugin in ["slang-glslang", "slang-glsl-module"] {
-        if !has_plugin(lib_dir, plugin) {
+        let dest_dir = if cfg!(windows) { bin_dir } else { lib_dir };
+        let exts: &[&str] = if cfg!(windows) {
+            &["dll"]
+        } else {
+            &["so", "dylib"]
+        };
+        if !has_plugin_shared(dest_dir, plugin, exts) {
+            // Sweep the build tree for a layout change.
+            for path in find_files(&build_dir, exts) {
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                if name.starts_with(plugin) {
+                    copy(&path, &dest_dir.join(name));
+                }
+            }
+        }
+        if !has_plugin_shared(dest_dir, plugin, exts) {
             panic!(
                 "slang build did not produce the `{plugin}` plugin library in {}",
-                lib_dir.display()
+                dest_dir.display()
             );
         }
     }
@@ -346,20 +392,6 @@ fn copy_libraries(build_dir: &Path, build_bin_dir: &Path, lib_dir: &Path) {
             copy(&path, &lib_dir.join(path.file_name().unwrap()));
         }
     }
-
-    // The plugins are emitted by their own CMake targets and can land outside
-    // the directory copied above; sweep for each one explicitly so none is
-    // lost.
-    for plugin in ["slang-glslang", "slang-glsl-module"] {
-        if !has_plugin(lib_dir, plugin) {
-            for path in find_files(build_dir, &["so", "dylib", "dll"]) {
-                let name = path.file_name().unwrap().to_string_lossy();
-                if name.contains(plugin) {
-                    copy(&path, &lib_dir.join(path.file_name().unwrap()));
-                }
-            }
-        }
-    }
 }
 
 /// Copy every regular file in `src_dir` with a library extension into `dst_dir`.
@@ -374,16 +406,18 @@ fn copy_dir_files(src_dir: &Path, dst_dir: &Path) {
     }
 }
 
-/// Whether `lib_dir` contains a shared plugin whose file name contains
-/// `needle`.
-fn has_plugin(lib_dir: &Path, needle: &str) -> bool {
-    let Ok(entries) = fs::read_dir(lib_dir) else {
+/// Whether `dir` contains the shared plugin `needle`: a file whose name
+/// starts with `needle` and whose extension is one of `exts` (the platform's
+/// shared-library extensions). Import libraries (.lib on Windows) never
+/// count: they are link inputs, not the runtime-loaded plugin.
+fn has_plugin_shared(dir: &Path, needle: &str, exts: &[&str]) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else {
         return false;
     };
     for entry in entries.flatten() {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name.contains(needle) && has_ext(&path, &["so", "dylib", "dll", "lib"]) {
+        if name.starts_with(needle) && has_ext(&path, exts) {
             return true;
         }
     }
