@@ -1,0 +1,27 @@
+name: CI (Windows)
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: test (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runs-on: windows-latest
+          - arch: aarch64
+            runs-on: windows-11-arm
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build and run tests
+        run: cargo test --workspace
