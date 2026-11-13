@@ -89,12 +89,22 @@ fn resolve_slang_source(manifest_dir: &Path, out_dir: &Path, tag: &str) -> PathB
 /// spirv-tools, ...). Idempotent and cheap when already initialized.
 fn init_slang_submodules(slang_dir: &Path) {
     let status = Command::new("git")
-        .args(["submodule", "update", "--init", "--recursive", "--depth", "1"])
+        .args([
+            "submodule",
+            "update",
+            "--init",
+            "--recursive",
+            "--depth",
+            "1",
+        ])
         .current_dir(slang_dir)
         .status()
         .expect("failed to run `git submodule update`");
     if !status.success() {
-        panic!("failed to initialize slang submodules in {}", slang_dir.display());
+        panic!(
+            "failed to initialize slang submodules in {}",
+            slang_dir.display()
+        );
     }
 }
 
@@ -131,7 +141,13 @@ fn clone_slang(tag: &str, dir: &Path) {
 
 /// Configure and build slang, then collect the binaries, libraries and headers
 /// into `bin_dir`, `lib_dir` and `include_dir`.
-fn build_slang(slang_src: &Path, out_dir: &Path, bin_dir: &Path, lib_dir: &Path, include_dir: &Path) {
+fn build_slang(
+    slang_src: &Path,
+    out_dir: &Path,
+    bin_dir: &Path,
+    lib_dir: &Path,
+    include_dir: &Path,
+) {
     for tool in ["git", "cmake"] {
         if Command::new(tool).arg("--version").output().is_err() {
             panic!("required tool not found on PATH: {tool}");
@@ -198,8 +214,8 @@ fn build_slang(slang_src: &Path, out_dir: &Path, bin_dir: &Path, lib_dir: &Path,
     // compiler backends the binaries dlopen at runtime; the binaries carry a
     // `$ORIGIN/../lib` RUNPATH, which is exactly this directory.
     fs::create_dir_all(lib_dir).expect("failed to create lib dir");
-    let slangc_path = find_file(&build_dir, &exe("slangc"))
-        .expect("slangc binary vanished from the build tree");
+    let slangc_path =
+        find_file(&build_dir, &exe("slangc")).expect("slangc binary vanished from the build tree");
     let build_bin = slangc_path.parent().unwrap().to_path_buf();
     let build_lib = build_bin.parent().unwrap().join("lib");
     let mut copied_any = false;
@@ -283,7 +299,6 @@ fn has_ext(path: &Path, exts: &[&str]) -> bool {
 }
 
 fn copy(src: &Path, dst: &Path) {
-    fs::copy(src, dst).unwrap_or_else(|e| {
-        panic!("failed to copy {} to {}: {e}", src.display(), dst.display())
-    });
+    fs::copy(src, dst)
+        .unwrap_or_else(|e| panic!("failed to copy {} to {}: {e}", src.display(), dst.display()));
 }

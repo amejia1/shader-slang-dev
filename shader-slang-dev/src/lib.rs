@@ -124,3 +124,74 @@ pub fn lib_slang_glslang() -> PathBuf {
 pub fn lib_slang_glsl_module() -> PathBuf {
     shader_slang_src::lib_slang_glsl_module()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::Path;
+
+    /// Assert that `path` is an existing, readable directory.
+    fn assert_readable_dir(path: &Path) {
+        assert!(
+            path.is_dir(),
+            "expected an existing directory, got: {}",
+            path.display()
+        );
+        fs::read_dir(path)
+            .unwrap_or_else(|e| panic!("directory is not readable ({}): {e}", path.display()));
+    }
+
+    /// Assert that `path` is an existing, readable file.
+    fn assert_readable_file(path: &Path) {
+        assert!(
+            path.is_file(),
+            "expected an existing file, got: {}",
+            path.display()
+        );
+        fs::File::open(path)
+            .unwrap_or_else(|e| panic!("file is not readable ({}): {e}", path.display()));
+    }
+
+    #[test]
+    fn directories_exist_and_are_readable() {
+        assert_readable_dir(&artifact_root());
+        assert_readable_dir(&bin_dir());
+        assert_readable_dir(&lib_dir());
+        assert_readable_dir(&include_dir());
+    }
+
+    #[test]
+    fn binaries_exist_and_are_readable() {
+        assert_readable_file(&slangc());
+        assert_readable_file(&slangd());
+        assert_readable_file(&slang());
+        assert_readable_file(&slangi());
+        assert_readable_file(&slang_replay());
+    }
+
+    #[test]
+    fn libraries_exist_and_are_readable() {
+        assert_readable_file(&lib_slang_compiler());
+        assert_readable_file(&lib_core());
+        assert_readable_file(&lib_compiler_core());
+        assert_readable_file(&lib_slang_rt());
+        assert_readable_file(&lib_slang_cpp_parser());
+        assert_readable_file(&lib_slang_glslang());
+        assert_readable_file(&lib_slang_glsl_module());
+    }
+
+    #[test]
+    fn generic_binary_and_library_helpers_resolve() {
+        assert_readable_file(&binary("slangc"));
+
+        let compiler_lib = lib_slang_compiler();
+        let name = compiler_lib
+            .file_name()
+            .expect("library path has no file name")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(library(&name), compiler_lib);
+        assert_readable_file(&library(&name));
+    }
+}
