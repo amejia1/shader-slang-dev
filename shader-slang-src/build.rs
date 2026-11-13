@@ -286,7 +286,7 @@ fn build_slang(
             // Sweep the build tree for a layout change.
             for path in find_files(&build_dir, exts) {
                 let name = path.file_name().unwrap().to_string_lossy().into_owned();
-                if name.starts_with(plugin) {
+                if name.contains(plugin) {
                     copy(&path, &dest_dir.join(name));
                 }
             }
@@ -407,9 +407,10 @@ fn copy_dir_files(src_dir: &Path, dst_dir: &Path) {
 }
 
 /// Whether `dir` contains the shared plugin `needle`: a file whose name
-/// starts with `needle` and whose extension is one of `exts` (the platform's
-/// shared-library extensions). Import libraries (.lib on Windows) never
-/// count: they are link inputs, not the runtime-loaded plugin.
+/// contains `needle` (non-Windows names carry the `lib` prefix) and whose
+/// extension is one of `exts` (the platform's shared-library extensions).
+/// Import libraries (.lib on Windows) never count: they are link inputs, not
+/// the runtime-loaded plugin.
 fn has_plugin_shared(dir: &Path, needle: &str, exts: &[&str]) -> bool {
     let Ok(entries) = fs::read_dir(dir) else {
         return false;
@@ -417,7 +418,7 @@ fn has_plugin_shared(dir: &Path, needle: &str, exts: &[&str]) -> bool {
     for entry in entries.flatten() {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with(needle) && has_ext(&path, exts) {
+        if name.contains(needle) && has_ext(&path, exts) {
             return true;
         }
     }
