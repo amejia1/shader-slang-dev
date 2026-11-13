@@ -43,6 +43,13 @@ pub fn bin_dir() -> PathBuf {
     shader_slang_src::bin_dir()
 }
 
+/// Directory holding the loose standard-module files
+/// (`slang-standard-module-<version>/`), resolved at runtime relative to the
+/// slang binaries; required for `import slang.<module>`.
+pub fn standard_module_dir() -> PathBuf {
+    shader_slang_src::standard_module_dir()
+}
+
 /// Directory containing the built static/shared libraries; use as an `-L` flag.
 pub fn lib_dir() -> PathBuf {
     shader_slang_src::lib_dir()
@@ -142,15 +149,12 @@ mod tests {
             .unwrap_or_else(|e| panic!("directory is not readable ({}): {e}", path.display()));
     }
 
-    /// Recursively list every file under the collected artifact directories
-    /// (`bin/`, `lib/`, `include/`), one per line. Makes a missing-file
-    /// failure self-describing: the panic message shows exactly what the
-    /// build actually produced.
-    fn list_artifact_files() -> String {
+    /// Recursively collect the file names under `dir` (sorted).
+    fn list_artifact_files_under(dir: &Path) -> Vec<String> {
         let mut files = Vec::new();
-        let mut stack = vec![bin_dir(), lib_dir(), include_dir()];
-        while let Some(dir) = stack.pop() {
-            let Ok(entries) = fs::read_dir(&dir) else {
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(next) = stack.pop() {
+            let Ok(entries) = fs::read_dir(&next) else {
                 continue;
             };
             for entry in entries.flatten() {
@@ -158,15 +162,30 @@ mod tests {
                 if path.is_dir() {
                     stack.push(path);
                 } else {
-                    files.push(path);
+                    files.push(
+                        path.file_name()
+                            .expect("file has no name")
+                            .to_string_lossy()
+                            .into_owned(),
+                    );
                 }
             }
         }
         files.sort();
         files
-            .iter()
-            .map(|p| format!("  {}\n", p.display()))
-            .collect()
+    }
+
+    /// Recursively list every file under the collected artifact directories
+    /// (`bin/`, `lib/`, `include/`), one per line. Makes a missing-file
+    /// failure self-describing: the panic message shows exactly what the
+    /// build actually produced.
+    fn list_artifact_files() -> String {
+        let mut all = Vec::new();
+        for dir in [bin_dir(), lib_dir(), include_dir()] {
+            all.extend(list_artifact_files_under(&dir));
+        }
+        all.sort();
+        all.iter().map(|n| format!("  {n}\n")).collect()
     }
 
     /// Assert that `path` is an existing, readable file.
@@ -189,6 +208,16 @@ mod tests {
         assert_readable_dir(&bin_dir());
         assert_readable_dir(&lib_dir());
         assert_readable_dir(&include_dir());
+        assert_readable_dir(&standard_module_dir());
+        // The standard-module tree must actually contain module files.
+        let has_module = list_artifact_files_under(&standard_module_dir())
+            .iter()
+            .any(|name| name.ends_with(".slang-module"));
+        assert!(
+            has_module,
+            "no .slang-module files under {}",
+            standard_module_dir().display()
+        );
     }
 
     #[test]

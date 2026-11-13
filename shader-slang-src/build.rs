@@ -266,6 +266,19 @@ fn build_slang(
         }
     }
 
+    // The loose standard-module tree (`slang-standard-module-<version>/`) is
+    // resolved at runtime relative to the slang binary's directory, so it
+    // must sit next to the collected binaries for `import slang.<module>` to
+    // work. It is always produced as part of a slangc build.
+    let module_dir_name = format!("slang-standard-module-{}", slang_version());
+    let found = find_dir(&build_dir, &module_dir_name).unwrap_or_else(|| {
+        panic!(
+            "slang build did not produce a `{module_dir_name}` directory under {}",
+            build_dir.display()
+        )
+    });
+    copy_dir_tree(&found, &bin_dir.join(&module_dir_name));
+
     // Show exactly what this build collected (see `list_out_dir`).
     list_out_dir(out_dir, bin_dir, lib_dir, include_dir);
 
@@ -413,6 +426,38 @@ fn list_out_dir(out_dir: &Path, bin_dir: &Path, lib_dir: &Path, include_dir: &Pa
     for dir in [bin_dir, lib_dir, include_dir] {
         for path in collect_files(dir) {
             println!("  {}", path.display());
+        }
+    }
+}
+
+/// Recursively search `dir` for a directory with the exact `name`.
+fn find_dir(dir: &Path, name: &str) -> Option<PathBuf> {
+    let entries = fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if path.file_name().and_then(|n| n.to_str()) == Some(name) {
+                return Some(path);
+            }
+            if let Some(found) = find_dir(&path, name) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+/// Recursively copy the tree rooted at `src` into `dst` (existing files are
+/// overwritten).
+fn copy_dir_tree(src: &Path, dst: &Path) {
+    fs::create_dir_all(dst).expect("failed to create directory");
+    let entries = fs::read_dir(src).expect("failed to read directory");
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            copy_dir_tree(&path, &dst.join(entry.file_name()));
+        } else {
+            copy(&path, &dst.join(path.file_name().unwrap()));
         }
     }
 }
