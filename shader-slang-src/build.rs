@@ -10,6 +10,9 @@ const SLANG_REPO_URL: &str = "https://github.com/shader-slang/slang.git";
 /// `slangc` is the compiler most consumers invoke; the rest are convenience.
 const SLANG_BINARIES: &[&str] = &["slangc", "slangd", "slangi", "slang", "slang-replay"];
 
+/// Library file extensions copied into the artifact `lib/` directory.
+const LIBRARY_EXTENSIONS: &[&str] = &["a", "lib", "so", "dylib", "dll"];
+
 fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is not set"));
     let manifest_dir =
@@ -161,7 +164,9 @@ fn build_slang(
         .to_string();
 
     // Configure with the same flags as candle's build-install-slang.sh:
-    // static compiler library, lean build (no tests/examples/rhi/gfx).
+    // static compiler library, lean build (no tests/examples/rhi/gfx). The
+    // glslang backend plugin is explicitly requested because `slangc` dlopens
+    // it at runtime; without it the toolchain is incomplete.
     let status = Command::new("cmake")
         .arg("-S")
         .arg(slang_src)
@@ -173,6 +178,7 @@ fn build_slang(
         .arg("-DSLANG_ENABLE_EXAMPLES=OFF")
         .arg("-DSLANG_ENABLE_SLANG_RHI=OFF")
         .arg("-DSLANG_ENABLE_GFX=OFF")
+        .arg("-DSLANG_ENABLE_SLANG_GLSLANG=ON")
         .status()
         .expect("failed to run cmake");
     if !status.success() {
@@ -195,17 +201,28 @@ fn build_slang(
         panic!("cmake build of slang failed");
     }
 
+    // Locate the directory CMake emitted the executables into. Do not search
+    // the whole tree for `slangc`: CMake also leaves stub files named `slangc`
+    // next to per-target build rules, and picking one of those would make the
+    // sibling `lib/` lookup below point at an empty directory.
+    let build_bin_dir = find_bin_dir(&build_dir).unwrap_or_else(|| {
+        panic!(
+            "slang build did not produce a `slangc` binary under {}",
+            build_dir.display()
+        )
+    });
+
     // Collect the binaries.
     fs::create_dir_all(bin_dir).expect("failed to create bin dir");
     for name in SLANG_BINARIES {
-        if let Some(path) = find_file(&build_dir, &exe(name)) {
+        if let Some(path) = find_file(&build_bin_dir, &exe(name)) {
             copy(&path, &bin_dir.join(exe(name)));
         }
     }
     if !bin_dir.join(exe("slangc")).is_file() {
         panic!(
             "slang build did not produce a `slangc` binary under {}",
-            build_dir.display()
+            build_bin_dir.display()
         );
     }
 
@@ -214,26 +231,16 @@ fn build_slang(
     // compiler backends the binaries dlopen at runtime; the binaries carry a
     // `$ORIGIN/../lib` RUNPATH, which is exactly this directory.
     fs::create_dir_all(lib_dir).expect("failed to create lib dir");
-    let slangc_path =
-        find_file(&build_dir, &exe("slangc")).expect("slangc binary vanished from the build tree");
-    let build_bin = slangc_path.parent().unwrap().to_path_buf();
-    let build_lib = build_bin.parent().unwrap().join("lib");
-    let mut copied_any = false;
-    if let Ok(entries) = fs::read_dir(&build_lib) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() && has_ext(&path, &["a", "lib", "so", "dylib", "dll"]) {
-                copy(&path, &lib_dir.join(path.file_name().unwrap()));
-                copied_any = true;
-            }
-        }
-    }
-    // Best-effort fallback for layouts where the libraries are not a sibling
-    // of the binaries (e.g. multi-config generators on Windows).
-    if !copied_any {
-        for path in find_files(&build_dir, &["a", "lib", "so", "dylib", "dll"]) {
-            copy(&path, &lib_dir.join(path.file_name().unwrap()));
-        }
+    copy_libraries(&build_dir, &build_bin_dir, lib_dir);
+
+    // The glslang plugin is the backend `slangc` needs for GLSL/HLSL source
+    // compilation. Fail loudly here instead of at test time if a build layout
+    // change moved it somewhere the copy above did not reach.
+    if !has_glslang_plugin(lib_dir) {
+        panic!(
+            "slang build did not produce a slang-glslang plugin library in {}",
+            lib_dir.display()
+        );
     }
 
     // Copy the public headers (`slang.h`, ...) for consumers that compile
@@ -257,6 +264,100 @@ fn build_slang(
     if !status.success() {
         panic!("built slangc failed to run (`slangc -version` exited non-zero)");
     }
+}
+
+/// Find the CMake output directory holding the `slangc` executable.
+///
+/// CMake layouts vary by generator: single-config generators emit into
+/// `<build>/Release/bin` when slang overrides the output directories, while
+/// multi-config generators (Visual Studio, Ninja Multi-Config) use
+/// `<build>/<config>/bin`. A packaged install tree named
+/// `slang-<version>-<platform>/bin` may also be present.
+fn find_bin_dir(build_dir: &Path) -> Option<PathBuf> {
+    let candidates = [
+        build_dir.join("Release").join("bin"),
+        build_dir.join("bin"),
+        build_dir.join("Release"),
+        build_dir.to_path_buf(),
+    ];
+    for candidate in candidates {
+        if candidate.join(exe("slangc")).is_file() {
+            return Some(candidate);
+        }
+    }
+
+    // Packaged install tree, e.g. `<build>/slang-2026.21-linux-x86_64/bin`.
+    if let Ok(entries) = fs::read_dir(build_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let bin = path.join("bin");
+            if bin.join(exe("slangc")).is_file() {
+                return Some(bin);
+            }
+        }
+    }
+
+    // Last resort: the first executable named `slangc` anywhere in the tree.
+    find_file(build_dir, &exe("slangc")).and_then(|path| path.parent().map(Path::to_path_buf))
+}
+
+/// Copy the static and shared libraries produced by the build into `lib_dir`.
+fn copy_libraries(build_dir: &Path, build_bin_dir: &Path, lib_dir: &Path) {
+    // The common layout keeps `lib/` next to `bin/`.
+    let mut copied_any = false;
+    if let Some(parent) = build_bin_dir.parent() {
+        let sibling = parent.join("lib");
+        if sibling.is_dir() {
+            copy_dir_files(&sibling, lib_dir);
+            copied_any = true;
+        }
+    }
+
+    // Best-effort fallback for layouts where the libraries are not a sibling
+    // of the binaries.
+    if !copied_any {
+        for path in find_files(build_dir, LIBRARY_EXTENSIONS) {
+            copy(&path, &lib_dir.join(path.file_name().unwrap()));
+        }
+    }
+
+    // The plugin is emitted by its own CMake target and can land outside the
+    // directory copied above; sweep for it explicitly so it is never lost.
+    if !has_glslang_plugin(lib_dir) {
+        for path in find_files(build_dir, &["so", "dylib", "dll"]) {
+            let name = path.file_name().unwrap().to_string_lossy();
+            if name.contains("slang-glslang") {
+                copy(&path, &lib_dir.join(path.file_name().unwrap()));
+            }
+        }
+    }
+}
+
+/// Copy every regular file in `src_dir` with a library extension into `dst_dir`.
+fn copy_dir_files(src_dir: &Path, dst_dir: &Path) {
+    if let Ok(entries) = fs::read_dir(src_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() && has_ext(&path, LIBRARY_EXTENSIONS) {
+                copy(&path, &dst_dir.join(path.file_name().unwrap()));
+            }
+        }
+    }
+}
+
+/// Whether `lib_dir` contains the shared glslang backend plugin.
+fn has_glslang_plugin(lib_dir: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(lib_dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.contains("slang-glslang") && has_ext(&path, &["so", "dylib", "dll", "lib"]) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Recursively search `dir` for a file with the exact `name`.
