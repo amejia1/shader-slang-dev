@@ -12,9 +12,9 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runs-on: macos-13
+            runs-on: macos-15-intel
           - arch: aarch64
-            runs-on: macos-14
+            runs-on: macos-latest
     runs-on: ${{ matrix.runs-on }}
     steps:
       - name: Check out repository
