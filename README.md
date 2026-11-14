@@ -25,7 +25,8 @@ fn main() {
     // Compile shaders with the built slangc:
     //   std::process::Command::new(slangc).arg(...).status().unwrap();
     // Link against the built libraries with:
-    //   shader_slang_dev::lib_dir()   // -> pass as `-L <dir>`
+    //   shader_slang_dev::lib_dir()   // -> pass as `-L <dir>` or as
+    //  `cargo::rustc-link-search=[KIND=]<dir>` in cargo build script.
     // Compile against the headers with:
     //   shader_slang_dev::include_dir() // -> pass as `-I <dir>`
 }

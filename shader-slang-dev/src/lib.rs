@@ -23,7 +23,7 @@
 //!     assert!(status.success());
 //!
 //!     // Link against the built libraries, or compile against the headers:
-//!     let _lib_dir = shader_slang_dev::lib_dir();      // `-L <dir>`
+//!     let _lib_dir = shader_slang_dev::lib_dir();      // `-L <dir>` or `cargo::rustc-link-search=[KIND=]<dir>`
 //!     let _include_dir = shader_slang_dev::include_dir(); // `-I <dir>`
 //! }
 //! ```

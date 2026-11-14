@@ -25,7 +25,7 @@ pub fn bin_dir() -> PathBuf {
 }
 
 /// Directory containing the built static and shared libraries; suitable for a
-/// `-L` linker flag.
+/// `-L` linker flag or using as `cargo::rustc-link-search=[KIND=]<dir>` in cargo build script.
 pub fn lib_dir() -> PathBuf {
     artifact_root().join("lib")
 }

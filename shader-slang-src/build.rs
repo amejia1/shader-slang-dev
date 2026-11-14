@@ -279,7 +279,8 @@ fn build_slang(
     }
 
     // Collect the static and shared libraries into a single directory so it
-    // can be passed to a `-L` flag. The shared libraries are the downstream
+    // can be passed to a `-L` flag or as `cargo::rustc-link-search=[KIND=]<dir>` in
+    // cargo build script. The shared libraries are the downstream
     // compiler backends the binaries dlopen at runtime; the binaries carry a
     // `$ORIGIN/../lib` RUNPATH, which is exactly this directory.
     fs::create_dir_all(lib_dir).expect("failed to create lib dir");
