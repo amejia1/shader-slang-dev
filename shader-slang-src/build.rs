@@ -212,7 +212,11 @@ fn build_slang(
     // parallel-build races observed on macOS (duplicate ar invocations,
     // missing tablegen headers); an incremental retry resumes where the
     // failed run left off and recovers from them.
-    let status = if status.success() { status } else { run_build() };
+    let status = if status.success() {
+        status
+    } else {
+        run_build()
+    };
     if !status.success() {
         panic!("cmake build of slang failed");
     }
@@ -256,10 +260,7 @@ fn build_slang(
     // they must sit in the artifact bin/ as well.
     if cfg!(windows) {
         let Ok(entries) = fs::read_dir(&build_bin_dir) else {
-            panic!(
-                "failed to read build bin dir {}",
-                build_bin_dir.display()
-            );
+            panic!("failed to read build bin dir {}", build_bin_dir.display());
         };
         for entry in entries.flatten() {
             let path = entry.path();
