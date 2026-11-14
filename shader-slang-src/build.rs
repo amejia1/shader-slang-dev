@@ -24,7 +24,7 @@ fn main() {
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is not set"));
 
     // The slang release this crate builds comes from its `+<version>` build
-    // metadata (e.g. `0.1.0+2026.21` -> `2026.21`, tag `v2026.21`).
+    // metadata (e.g. `1.0.0+2026.21` -> `2026.21`, tag `v2026.21`).
     let slang_tag = format!("v{}", slang_version());
 
     let bin_dir = out_dir.join("bin");
@@ -80,14 +80,14 @@ fn artifacts_complete(bin_dir: &Path, lib_dir: &Path) -> bool {
 }
 
 /// The slang version this crate builds, taken from the `+<version>` build
-/// metadata of the crate's own version (`0.1.0+2026.21` -> `2026.21`).
+/// metadata of the crate's own version (`1.0.0+2026.21` -> `2026.21`).
 fn slang_version() -> &'static str {
     let full = env!("CARGO_PKG_VERSION");
     match full.split_once('+') {
         Some((_, version)) => version,
         None => panic!(
             "shader-slang-src version `{}` must encode the slang version as \
-             `+<version>` build metadata (e.g. `0.1.0+2026.21`)",
+             `+<version>` build metadata (e.g. `1.0.0+2026.21`)",
             full
         ),
     }
