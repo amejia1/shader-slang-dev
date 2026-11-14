@@ -10,6 +10,11 @@ const SLANG_REPO_URL: &str = "https://github.com/shader-slang/slang.git";
 /// `slangc` is the compiler most consumers invoke; the rest are convenience.
 const SLANG_BINARIES: &[&str] = &["slangc", "slangd", "slangi", "slang", "slang-replay"];
 
+/// Plugins `slangc` dloads at runtime (glslang for SPIR-V via GLSL,
+/// glsl-module for GLSL source); each must be present as a shared library
+/// (a DLL on Windows) among the collected artifacts.
+const SLANG_PLUGINS: &[&str] = &["slang-glslang", "slang-glsl-module"];
+
 /// Library file extensions copied into the artifact `lib/` directory.
 const LIBRARY_EXTENSIONS: &[&str] = &["a", "lib", "so", "dylib", "dll"];
 
@@ -29,7 +34,7 @@ fn main() {
     // Building slang from source is expensive, so skip it when the artifacts
     // already exist. Cargo already re-runs this script only when needed, but
     // this guard also makes repeated runs cheap.
-    if !bin_dir.join(exe("slangc")).is_file() {
+    if !artifacts_complete(&bin_dir, &lib_dir) {
         let slang_src = resolve_slang_source(&manifest_dir, &out_dir, &slang_tag);
         build_slang(&slang_src, &out_dir, &bin_dir, &lib_dir, &include_dir);
     }
@@ -45,6 +50,33 @@ fn main() {
     // Re-run if the vendored submodule or this script changes.
     println!("cargo:rerun-if-changed=slang");
     println!("cargo:rerun-if-changed=build.rs");
+}
+
+/// Whether the artifact set collected in `bin_dir`/`lib_dir` is complete
+/// enough to skip the build: the `slangc` executable, every runtime plugin
+/// library, and the standard-module tree must all be present. Checking only
+/// `slangc` would let a stale artifact set from an older revision of this
+/// script (one that collected fewer artifacts) satisfy the guard.
+fn artifacts_complete(bin_dir: &Path, lib_dir: &Path) -> bool {
+    if !bin_dir.join(exe("slangc")).is_file() {
+        return false;
+    }
+    let module_dir_name = format!("slang-standard-module-{}", slang_version());
+    if !bin_dir.join(&module_dir_name).is_dir() {
+        return false;
+    }
+    let plugin_dir = if cfg!(windows) { bin_dir } else { lib_dir };
+    let exts: &[&str] = if cfg!(windows) {
+        &["dll"]
+    } else {
+        &["so", "dylib"]
+    };
+    for plugin in SLANG_PLUGINS {
+        if !has_plugin_shared(plugin_dir, plugin, exts) {
+            return false;
+        }
+    }
+    true
 }
 
 /// The slang version this crate builds, taken from the `+<version>` build
@@ -276,7 +308,7 @@ fn build_slang(
     // on other platforms it is a shared library in lib/. Fail loudly here
     // instead of at test time if a build layout change moved one somewhere
     // the copies above did not reach.
-    for plugin in ["slang-glslang", "slang-glsl-module"] {
+    for plugin in SLANG_PLUGINS {
         let dest_dir = if cfg!(windows) { bin_dir } else { lib_dir };
         let exts: &[&str] = if cfg!(windows) {
             &["dll"]
