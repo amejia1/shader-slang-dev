@@ -1,3 +1,4 @@
+use cmake::Config as CmakeConfig;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -42,14 +43,14 @@ fn main() {
     // Expose the artifact root to the library so it can locate the binaries
     // and libraries it produced.
     println!(
-        "cargo:rustc-env=SHADER_SLANG_ARTIFACT_ROOT={}",
+        "cargo::rustc-env=SHADER_SLANG_ARTIFACT_ROOT={}",
         out_dir.display()
     );
 
-    println!("cargo:rustc-env=SHADER_SLANG_VERSION={}", slang_version());
+    println!("cargo::rustc-env=SHADER_SLANG_VERSION={}", slang_version());
     // Re-run if the vendored submodule or this script changes.
-    println!("cargo:rerun-if-changed=slang");
-    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo::rerun-if-changed=slang");
+    println!("cargo::rerun-if-changed=build.rs");
 }
 
 /// Whether the artifact set collected in `bin_dir`/`lib_dir` is complete
@@ -183,75 +184,46 @@ fn build_slang(
     lib_dir: &Path,
     include_dir: &Path,
 ) {
-    for tool in ["git", "cmake"] {
-        if Command::new(tool).arg("--version").output().is_err() {
-            panic!("required tool not found on PATH: {tool}");
-        }
+    if Command::new("git").arg("--version").output().is_err() {
+        panic!("required tool not found on PATH: git");
     }
 
     let build_dir = out_dir.join("build");
-    let jobs = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
-        .to_string();
 
-    // Configure with the same flags as candle's build-install-slang.sh:
-    // static compiler library, lean build (no tests/examples/rhi/gfx). The
-    // glslang backend plugin is explicitly requested because `slangc` dlopens
-    // it at runtime; without it the toolchain is incomplete.
-    let status = Command::new("cmake")
-        .arg("-S")
-        .arg(slang_src)
-        .arg("-B")
-        .arg(&build_dir)
-        .arg("-DCMAKE_BUILD_TYPE=Release")
-        .arg("-DSLANG_LIB_TYPE=STATIC")
-        .arg("-DSLANG_ENABLE_TESTS=OFF")
-        .arg("-DSLANG_ENABLE_EXAMPLES=OFF")
-        .arg("-DSLANG_ENABLE_SLANG_RHI=OFF")
-        .arg("-DSLANG_ENABLE_GFX=OFF")
-        .arg("-DSLANG_ENABLE_SLANG_GLSLANG=ON")
-        // Pin the version from this crate's own metadata. Slang otherwise
-        // derives it from git tags, which shallow checkouts (as used by CI)
-        // do not carry; without a tag it falls back to 0.0.0 and the
-        // versioned plugin file names would not match what the crate
-        // promises.
-        .arg(format!("-DSLANG_VERSION_NUMERIC={}", slang_version()))
-        .arg(format!("-DSLANG_VERSION_FULL={}", slang_version()))
-        .status()
-        .expect("failed to run cmake");
-    if !status.success() {
-        panic!("cmake configure of slang failed");
-    }
+    // Configure and build through the `cmake` crate, which drives the system
+    // `cmake` binary (failing clearly if it is not installed) and uses
+    // `<out_dir>/build` as its build directory, i.e. exactly `build_dir`
+    // above. The flags match candle's build-install-slang.sh: static
+    // compiler library, lean build (no tests/examples/rhi/gfx). The glslang
+    // backend plugin is explicitly requested because `slangc` dlopens it at
+    // runtime; without it the toolchain is incomplete.
+    let mut cmake_config = CmakeConfig::new(slang_src);
+    cmake_config
+        .out_dir(out_dir)
+        // Pin the build type to Release regardless of Rust's own profile
+        // (without this, the crate would build a Debug slang when the script
+        // runs under `cargo build`/`cargo test` in dev profile).
+        .profile("Release")
+        .define("SLANG_LIB_TYPE", "STATIC")
+        .define("SLANG_ENABLE_TESTS", "OFF")
+        .define("SLANG_ENABLE_EXAMPLES", "OFF")
+        .define("SLANG_ENABLE_SLANG_RHI", "OFF")
+        .define("SLANG_ENABLE_GFX", "OFF")
+        .define("SLANG_ENABLE_SLANG_GLSLANG", "ON");
+    // Pin the version from this crate's own metadata. Slang otherwise
+    // derives it from git tags, which shallow checkouts (as used by CI)
+    // do not carry; without a tag it falls back to 0.0.0 and the
+    // versioned plugin file names would not match what the crate
+    // promises.
+    cmake_config
+        .define("SLANG_VERSION_NUMERIC", slang_version())
+        .define("SLANG_VERSION_FULL", slang_version());
+    // Build the default target (everything) instead of the crate's default
+    // `install` target: the artifacts are collected from the build tree
+    // below, not from an install prefix.
+    cmake_config.no_build_target(true);
 
-    let run_build = || -> std::process::ExitStatus {
-        let mut build = Command::new("cmake");
-        build
-            .arg("--build")
-            .arg(&build_dir)
-            .arg("--config")
-            .arg("Release");
-        // `--parallel` is not meaningful for the Visual Studio generator; the
-        // best-effort Windows path omits it and lets MSBuild pick the default.
-        if !cfg!(windows) {
-            build.arg("--parallel").arg(&jobs);
-        }
-        build.status().expect("failed to run cmake --build")
-    };
-
-    let status = run_build();
-    // The dxc sub-build (an old LLVM snapshot with its own makefiles) has
-    // parallel-build races observed on macOS (duplicate ar invocations,
-    // missing tablegen headers); an incremental retry resumes where the
-    // failed run left off and recovers from them.
-    let status = if status.success() {
-        status
-    } else {
-        run_build()
-    };
-    if !status.success() {
-        panic!("cmake build of slang failed");
-    }
+    run_cmake_build(&mut cmake_config);
 
     // Locate the directory CMake emitted the executables into. Do not search
     // the whole tree for `slangc`: CMake also leaves stub files named `slangc`
@@ -369,6 +341,23 @@ fn build_slang(
         .expect("failed to run built slangc");
     if !status.success() {
         panic!("built slangc failed to run (`slangc -version` exited non-zero)");
+    }
+}
+
+/// Run the `cmake` crate's configure+build, retrying once on failure.
+///
+/// The dxc sub-build (an old LLVM snapshot with its own makefiles) has
+/// parallel-build races observed on macOS (duplicate ar invocations,
+/// missing tablegen headers); an incremental retry resumes where the
+/// failed run left off and recovers from them. The `cmake` crate panics on
+/// a failed command, so the first attempt is run inside `catch_unwind` to
+/// allow the retry.
+fn run_cmake_build(cmake_config: &mut CmakeConfig) {
+    let first_attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        cmake_config.build();
+    }));
+    if first_attempt.is_err() {
+        cmake_config.build();
     }
 }
 

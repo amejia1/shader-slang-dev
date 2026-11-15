@@ -12,7 +12,10 @@ readme = "README.md"
 
 # This crate vendors the shader-slang source as a git submodule at `slang/`.
 # When the submodule is unavailable (a crates.io tarball or a cargo git
-# dependency), build.rs clones the pinned release tag instead. No
-# build-dependencies are required: the build drives `git` and `cmake` directly.
+# dependency), build.rs clones the pinned release tag instead. CMake is
+# driven through the `cmake` crate; `git` is still invoked directly.
+
+[build-dependencies]
+cmake = "0.1"
 
 [dependencies]

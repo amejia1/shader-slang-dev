@@ -73,11 +73,12 @@ declares for `shader-slang-src`, cargo fails with a clear resolution error.
 
 ## How it builds
 
-`shader-slang-src`'s `build.rs` configures and builds shader-slang with CMake
-using the same flags as candle's `build-install-slang.sh`
-(`-DSLANG_LIB_TYPE=STATIC`, tests/examples/rhi/gfx disabled), then collects the
-produced binaries into `<out>/bin/`, the static/shared libraries into
-`<out>/lib/`, and the public headers into `<out>/include/`.
+`shader-slang-src`'s `build.rs` configures and builds shader-slang through
+the `cmake` crate (which drives the system `cmake` binary) using the same
+flags as candle's `build-install-slang.sh` (`-DSLANG_LIB_TYPE=STATIC`,
+tests/examples/rhi/gfx disabled), then collects the produced binaries into
+`<out>/bin/`, the static/shared libraries into `<out>/lib/`, and the public
+headers into `<out>/include/`.
 
 The build requires `git`, `cmake` and a C/C++ toolchain. Linux is fully
 supported; macOS and Windows support is best-effort.
