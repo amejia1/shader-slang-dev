@@ -4,13 +4,15 @@ Rust crates for building the [shader-slang](https://github.com/shader-slang/slan
 compiler toolchain (`slangc` and friends) from source and locating the built
 artifacts from another crate's `build.rs`.
 
-- **`shader-slang-src`** builds the shader-slang binaries and libraries from
-  source with static linking enabled. The shader-slang source is tracked as a
-  git submodule pinned to a release tag; the crate version carries the slang
+- **`shader-slang-src`** builds the shader-slang toolchain from source with
+  static linking enabled and installs it in the same layout as the
+  shader-slang release tarballs. The shader-slang source is tracked as a git
+  submodule pinned to a release tag; the crate version carries the slang
   version as `+<version>` build metadata (e.g. `1.0.0+2026.21` builds
   shader-slang `2026.21`).
 - **`shader-slang-dev`** depends on `shader-slang-src` and exposes `PathBuf`
-  accessors for the built binaries, libraries and headers.
+  accessors for the installed binaries, libraries, headers and share
+  directory.
 
 ## Usage
 
@@ -76,12 +78,26 @@ declares for `shader-slang-src`, cargo fails with a clear resolution error.
 `shader-slang-src`'s `build.rs` configures and builds shader-slang through
 the `cmake` crate (which drives the system `cmake` binary) using the same
 flags as candle's `build-install-slang.sh` (`-DSLANG_LIB_TYPE=STATIC`,
-tests/examples/rhi/gfx disabled), then collects the produced binaries into
-`<out>/bin/`, the static/shared libraries into `<out>/lib/`, and the public
-headers into `<out>/include/`.
+tests/examples/rhi/gfx disabled), then installs the toolchain into the
+artifact root (`<out_dir>/slang-artifact/`) with
+`cmake --install <build_dir> --prefix <artifact_root> --strip`. The install
+tree has the same layout as the shader-slang release tarballs:
 
-The build requires `git`, `cmake` and a C/C++ toolchain. Linux is fully
-supported; macOS and Windows support is best-effort.
+- `bin/` — the binaries (`slangc`, `slangd`, `slang`, `slangi`,
+  `slang-replay`), plus a copy of the standard-module tree: the statically
+  linked `slangc` resolves the loose standard modules relative to its own
+  executable, so the tree must sit next to the binary.
+- `lib/` — the static libraries, the shared backend plugins (which `slangc`
+  dlopens at runtime through the binaries' `$ORIGIN/../lib` RUNPATH), the
+  standard-module tree, and the CMake package files.
+- `include/` — the public headers.
+- `share/` — the documentation (`doc/slang/`) and the agent skills
+  (`slang/agent-skills/`).
+- the license and third-party notice files at the root.
+
+The build requires `git`, `cmake` (>= 3.20, for `cmake --install --strip`)
+and a C/C++ toolchain. Linux is fully supported; macOS and Windows support
+is best-effort.
 
 The shader-slang source is a git submodule at `slang/`. When the submodule is
 not available (a `crates.io` tarball or a cargo *git* dependency, neither of
@@ -94,8 +110,8 @@ Setting the environment variable `SHADER_SLANG_SRC_DOWNLOAD_BINARIES` to
 `true` (case-sensitive) makes `build.rs` download the prebuilt shader-slang
 release binaries for the target platform from the GitHub release
 corresponding to the crate's slang version (e.g. `1.0.0+2026.21` uses tag
-`v2026.21`) and extract them with the `tar` and `flate2` crates, instead of
-building from source:
+`v2026.21`) and unpack the tarball into the artifact root with the `tar`
+and `flate2` crates, instead of building from source:
 
 ```sh
 SHADER_SLANG_SRC_DOWNLOAD_BINARIES=true cargo build
@@ -103,17 +119,16 @@ SHADER_SLANG_SRC_DOWNLOAD_BINARIES=true cargo build
 
 Any other value (or an unset variable) builds from source. Switching the
 variable back and forth re-runs the build script and re-provides the
-matching artifacts (the previously collected set is removed when the
+matching artifacts (the previously installed set is removed when the
 provenance changes). Downloading supports Linux, macOS, and Windows on
 `x86_64` and `aarch64`; any other target platform or architecture is an
 error rather than a silent source build.
 
 The two provenances differ in what they provide:
 
-- The release tarballs ship **shared** libraries (and import `.lib` files on
-  Windows), not static ones, so the static-library accessors
-  (`lib_slang_compiler()`, `lib_core()`, ...) only resolve in source
-  builds.
+- The source build installs **static** libraries; the release tarballs ship
+  **shared** libraries (and import `.lib` files on Windows) instead, plus
+  the prebuilt `slang-llvm` backend plugin and `libgfx`.
 - `slang-replay` is only produced by the source build.
 
 The `shader-slang-src::SOURCE` constant (`"source"` or `"download"`) tells
