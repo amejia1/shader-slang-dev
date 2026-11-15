@@ -87,3 +87,34 @@ The shader-slang source is a git submodule at `slang/`. When the submodule is
 not available (a `crates.io` tarball or a cargo *git* dependency, neither of
 which carries submodule contents), `build.rs` clones the pinned release tag
 instead.
+
+### Downloading the prebuilt binaries
+
+Setting the environment variable `SHADER_SLANG_SRC_DOWNLOAD_BINARIES` to
+`true` (case-sensitive) makes `build.rs` download the prebuilt shader-slang
+release binaries for the target platform from the GitHub release
+corresponding to the crate's slang version (e.g. `1.0.0+2026.21` uses tag
+`v2026.21`) and extract them with the `tar` and `flate2` crates, instead of
+building from source:
+
+```sh
+SHADER_SLANG_SRC_DOWNLOAD_BINARIES=true cargo build
+```
+
+Any other value (or an unset variable) builds from source. Switching the
+variable back and forth re-runs the build script and re-provides the
+matching artifacts (the previously collected set is removed when the
+provenance changes). Downloading supports Linux, macOS, and Windows on
+`x86_64` and `aarch64`; any other target platform or architecture is an
+error rather than a silent source build.
+
+The two provenances differ in what they provide:
+
+- The release tarballs ship **shared** libraries (and import `.lib` files on
+  Windows), not static ones, so the static-library accessors
+  (`lib_slang_compiler()`, `lib_core()`, ...) only resolve in source
+  builds.
+- `slang-replay` is only produced by the source build.
+
+The `shader-slang-src::SOURCE` constant (`"source"` or `"download"`) tells
+the two apart.

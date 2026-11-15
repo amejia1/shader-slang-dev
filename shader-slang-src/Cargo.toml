@@ -13,9 +13,15 @@ readme = "README.md"
 # This crate vendors the shader-slang source as a git submodule at `slang/`.
 # When the submodule is unavailable (a crates.io tarball or a cargo git
 # dependency), build.rs clones the pinned release tag instead. CMake is
-# driven through the `cmake` crate; `git` is still invoked directly.
+# driven through the `cmake` crate; `git` is still invoked directly. When
+# SHADER_SLANG_SRC_DOWNLOAD_BINARIES is set to "true", build.rs downloads
+# the prebuilt release binaries with `ureq` and extracts them with `tar`
+# and `flate2` instead of building them.
 
 [build-dependencies]
 cmake = "0.1"
+flate2 = "1"
+tar = "0.4"
+ureq = "3"
 
 [dependencies]

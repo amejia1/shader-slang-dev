@@ -33,6 +33,10 @@ use std::path::PathBuf;
 /// The shader-slang release built by the underlying `shader-slang-src` crate.
 pub use shader_slang_src::SLANG_VERSION;
 
+/// How the artifacts were obtained (`"source"` or `"download"`); see
+/// [`shader_slang_src::SOURCE`].
+pub use shader_slang_src::SOURCE;
+
 /// Directory containing all built artifacts (`bin/`, `lib/`, `include/`).
 pub fn artifact_root() -> PathBuf {
     shader_slang_src::artifact_root()
@@ -80,7 +84,8 @@ pub fn slangi() -> PathBuf {
     shader_slang_src::slangi()
 }
 
-/// Path to the `slang-replay` executable.
+/// Path to the `slang-replay` executable. Only present in source builds
+/// (`SOURCE == "source"`): the release tarballs do not ship `slang-replay`.
 pub fn slang_replay() -> PathBuf {
     shader_slang_src::slang_replay()
 }
@@ -98,26 +103,32 @@ pub fn library(name: &str) -> PathBuf {
 }
 
 /// Path to the static `slang-compiler` library (the core compiler API).
+/// Only present in source builds (`SOURCE == "source"`): the release
+/// tarballs ship shared libraries instead of static ones.
 pub fn lib_slang_compiler() -> PathBuf {
     shader_slang_src::lib_slang_compiler()
 }
 
-/// Path to the static `core` library.
+/// Path to the static `core` library. Only present in source builds
+/// (`SOURCE == "source"`).
 pub fn lib_core() -> PathBuf {
     shader_slang_src::lib_core()
 }
 
-/// Path to the static `compiler-core` library.
+/// Path to the static `compiler-core` library. Only present in source builds
+/// (`SOURCE == "source"`).
 pub fn lib_compiler_core() -> PathBuf {
     shader_slang_src::lib_compiler_core()
 }
 
-/// Path to the static `slang-rt` runtime library.
+/// Path to the static `slang-rt` runtime library. Only present in source
+/// builds (`SOURCE == "source"`).
 pub fn lib_slang_rt() -> PathBuf {
     shader_slang_src::lib_slang_rt()
 }
 
-/// Path to the static `slang-cpp-parser` library.
+/// Path to the static `slang-cpp-parser` library. Only present in source
+/// builds (`SOURCE == "source"`).
 pub fn lib_slang_cpp_parser() -> PathBuf {
     shader_slang_src::lib_slang_cpp_parser()
 }
@@ -226,16 +237,59 @@ mod tests {
         assert_readable_file(&slangd());
         assert_readable_file(&slang());
         assert_readable_file(&slangi());
-        assert_readable_file(&slang_replay());
+        // `slang-replay` is only produced by the source build; the release
+        // tarballs do not ship it.
+        if SOURCE == "source" {
+            assert_readable_file(&slang_replay());
+        }
+    }
+
+    /// The shared `slang-compiler` library under `lib_dir` that the release
+    /// tarballs ship instead of the static libraries: `libslang-compiler.so`
+    /// / `.dylib`, or the `slang-compiler.lib` import library on Windows.
+    fn downloaded_compiler_lib() -> PathBuf {
+        let dir = lib_dir();
+        let exts: &[&str] = &["so", "dylib", "lib"];
+        let Ok(entries) = fs::read_dir(&dir) else {
+            panic!("directory is not readable: {}", dir.display());
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.contains("slang-compiler"))
+                && path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| exts.contains(&e))
+            {
+                return path;
+            }
+        }
+        panic!(
+            "no shared `slang-compiler` library under {}\nfiles under {}:\n{}",
+            dir.display(),
+            artifact_root().display(),
+            list_artifact_files()
+        );
     }
 
     #[test]
     fn libraries_exist_and_are_readable() {
-        assert_readable_file(&lib_slang_compiler());
-        assert_readable_file(&lib_core());
-        assert_readable_file(&lib_compiler_core());
-        assert_readable_file(&lib_slang_rt());
-        assert_readable_file(&lib_slang_cpp_parser());
+        if SOURCE == "source" {
+            // The source build produces static libraries.
+            assert_readable_file(&lib_slang_compiler());
+            assert_readable_file(&lib_core());
+            assert_readable_file(&lib_compiler_core());
+            assert_readable_file(&lib_slang_rt());
+            assert_readable_file(&lib_slang_cpp_parser());
+        } else {
+            // The release tarballs ship shared libraries instead of static
+            // ones.
+            assert_readable_file(&downloaded_compiler_lib());
+        }
         assert_readable_file(&lib_slang_glslang());
         assert_readable_file(&lib_slang_glsl_module());
     }
@@ -244,7 +298,13 @@ mod tests {
     fn generic_binary_and_library_helpers_resolve() {
         assert_readable_file(&binary("slangc"));
 
-        let compiler_lib = lib_slang_compiler();
+        // Check `library` with a library the current provenance actually
+        // provides under `lib_dir`.
+        let compiler_lib = if SOURCE == "source" {
+            lib_slang_compiler()
+        } else {
+            downloaded_compiler_lib()
+        };
         let name = compiler_lib
             .file_name()
             .expect("library path has no file name")

@@ -7,6 +7,11 @@ use std::process::Command;
 /// Upstream shader-slang repository.
 const SLANG_REPO_URL: &str = "https://github.com/shader-slang/slang.git";
 
+/// Environment variable that switches the artifact provenance: when set to
+/// exactly `"true"` (case-sensitive), prebuilt shader-slang release binaries
+/// are downloaded from GitHub instead of built from source.
+const DOWNLOAD_ENV_VAR: &str = "SHADER_SLANG_SRC_DOWNLOAD_BINARIES";
+
 /// Programs built by slang; each is copied when the build produced it.
 /// `slangc` is the compiler most consumers invoke; the rest are convenience.
 const SLANG_BINARIES: &[&str] = &["slangc", "slangd", "slangi", "slang", "slang-replay"];
@@ -32,13 +37,47 @@ fn main() {
     let lib_dir = out_dir.join("lib");
     let include_dir = out_dir.join("include");
 
-    // Building slang from source is expensive, so skip it when the artifacts
-    // already exist. Cargo already re-runs this script only when needed, but
-    // this guard also makes repeated runs cheap.
-    if !artifacts_complete(&bin_dir, &lib_dir) {
-        let slang_src = resolve_slang_source(&manifest_dir, &out_dir, &slang_tag);
-        build_slang(&slang_src, &out_dir, &bin_dir, &lib_dir, &include_dir);
+    // When SHADER_SLANG_SRC_DOWNLOAD_BINARIES is set to exactly "true"
+    // (case-sensitive), download the prebuilt shader-slang release binaries
+    // from GitHub instead of building them from source.
+    let download_binaries = env::var(DOWNLOAD_ENV_VAR).is_ok_and(|value| value == "true");
+    let source = if download_binaries {
+        "download"
+    } else {
+        "source"
+    };
+
+    // Artifacts collected in a previous run belong to the provenance that
+    // run used. When the provenance changes (the environment variable was
+    // set or unset), remove the stale artifacts so the set provided below
+    // always matches the current provenance.
+    let provenance_file = out_dir.join(".slang-artifact-source");
+    let same_provenance = fs::read_to_string(&provenance_file)
+        .map(|previous| previous.trim() == source)
+        .unwrap_or(false);
+    if !same_provenance {
+        for dir in [&bin_dir, &lib_dir, &include_dir] {
+            if dir.exists() {
+                fs::remove_dir_all(dir).unwrap_or_else(|e| {
+                    panic!("failed to remove stale artifact dir {}: {e}", dir.display())
+                });
+            }
+        }
     }
+
+    // Producing the slang toolchain is expensive, so skip it when the
+    // artifacts already exist. Cargo already re-runs this script only when
+    // needed, but this guard also makes repeated runs cheap.
+    if !artifacts_complete(&bin_dir, &lib_dir) {
+        if download_binaries {
+            download_slang(&out_dir, &bin_dir, &lib_dir, &include_dir);
+        } else {
+            let slang_src = resolve_slang_source(&manifest_dir, &out_dir, &slang_tag);
+            build_slang(&slang_src, &out_dir, &bin_dir, &lib_dir, &include_dir);
+        }
+    }
+    fs::write(&provenance_file, source)
+        .unwrap_or_else(|e| panic!("failed to write {}: {e}", provenance_file.display()));
 
     // Expose the artifact root to the library so it can locate the binaries
     // and libraries it produced.
@@ -48,9 +87,12 @@ fn main() {
     );
 
     println!("cargo::rustc-env=SHADER_SLANG_VERSION={}", slang_version());
+    println!("cargo::rustc-env=SHADER_SLANG_SOURCE={}", source);
     // Re-run if the vendored submodule or this script changes.
     println!("cargo::rerun-if-changed=slang");
     println!("cargo::rerun-if-changed=build.rs");
+    // Re-run when the download/build provenance switches.
+    println!("cargo::rerun-if-env-changed=SHADER_SLANG_SRC_DOWNLOAD_BINARIES");
 }
 
 /// Whether the artifact set collected in `bin_dir`/`lib_dir` is complete
@@ -359,6 +401,134 @@ fn run_cmake_build(cmake_config: &mut CmakeConfig) {
     if first_attempt.is_err() {
         cmake_config.build();
     }
+}
+
+/// Download the prebuilt shader-slang release for the target platform from
+/// the GitHub release corresponding to this crate's `+<version>` metadata
+/// (e.g. `1.0.0+2026.21` -> tag `v2026.21`), and collect the binaries,
+/// libraries and headers into `bin_dir`, `lib_dir` and `include_dir`.
+fn download_slang(out_dir: &Path, bin_dir: &Path, lib_dir: &Path, include_dir: &Path) {
+    let (os, arch) = download_target();
+    let file_name = format!("slang-{}-{}-{}.tar.gz", slang_version(), os, arch);
+    let url = format!(
+        "https://github.com/shader-slang/slang/releases/download/v{}/{file_name}",
+        slang_version()
+    );
+
+    let tarball = out_dir.join(&file_name);
+    let response = ureq::get(&url)
+        .header("user-agent", "shader-slang-src")
+        .call()
+        .unwrap_or_else(|e| panic!("failed to download {url}: {e}"));
+    let mut file = fs::File::create(&tarball)
+        .unwrap_or_else(|e| panic!("failed to create {}: {e}", tarball.display()));
+    std::io::copy(&mut response.into_body().into_reader(), &mut file)
+        .unwrap_or_else(|e| panic!("failed to write {}: {e}", tarball.display()));
+
+    // Unpack the release tarball directly into `out_dir`: its root entries
+    // are exactly the `bin/`, `lib/`, `include/` artifact directories (plus
+    // documentation entries that are skipped below). The `tar` crate
+    // recreates the symlinks (e.g. `libslang-compiler.so` ->
+    // `libslang-compiler.so.0.2026.21`) that a file copy would not.
+    let file = fs::File::open(&tarball)
+        .unwrap_or_else(|e| panic!("failed to open {}: {e}", tarball.display()));
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
+    let entries = archive
+        .entries()
+        .unwrap_or_else(|e| panic!("failed to read entries of {file_name}: {e}"));
+    for entry in entries {
+        let mut entry = entry.unwrap_or_else(|e| panic!("failed to read a {file_name} entry: {e}"));
+        let path = entry
+            .path()
+            .unwrap_or_else(|e| panic!("failed to read a {file_name} entry path: {e}"));
+        let top = path
+            .components()
+            .next()
+            .and_then(|c| c.as_os_str().to_str())
+            .unwrap_or_default();
+        if matches!(top, "bin" | "lib" | "include") {
+            entry
+                .unpack_in(out_dir)
+                .unwrap_or_else(|e| panic!("failed to unpack {file_name}: {e}"));
+        }
+    }
+    for (dir, label) in [(bin_dir, "bin"), (lib_dir, "lib"), (include_dir, "include")] {
+        if !dir.is_dir() {
+            panic!("downloaded {file_name} has no {label}/ directory");
+        }
+    }
+
+    // The runtime resolves the loose standard-module tree relative to the
+    // loaded compiler library: beside slangc.dll on Windows, beside
+    // libslang(-compiler) on Linux/macOS - the release layout already
+    // satisfies that. Mirror the tree into the artifact `bin/` as well so
+    // the `standard_module_dir()` accessor (which always points at `bin/`)
+    // resolves on every platform.
+    let module_dir_name = format!("slang-standard-module-{}", slang_version());
+    let module_root = if os == "windows" { bin_dir } else { lib_dir };
+    let module_tree = module_root.join(&module_dir_name);
+    if module_tree.is_dir() && !bin_dir.join(&module_dir_name).is_dir() {
+        copy_dir_tree(&module_tree, &bin_dir.join(&module_dir_name));
+    }
+
+    // Fail loudly here instead of at test time if the release lacks a
+    // runtime plugin.
+    let plugin_dir = if os == "windows" { bin_dir } else { lib_dir };
+    let exts: &[&str] = if os == "windows" {
+        &["dll"]
+    } else {
+        &["so", "dylib"]
+    };
+    for plugin in SLANG_PLUGINS {
+        if !has_plugin_shared(plugin_dir, plugin, exts) {
+            panic!(
+                "downloaded {file_name} does not contain the `{plugin}` plugin in {}",
+                plugin_dir.display()
+            );
+        }
+    }
+
+    // Show exactly what this download collected (see `list_out_dir`).
+    list_out_dir(out_dir, bin_dir, lib_dir, include_dir);
+
+    // Smoke check: the downloaded slangc must run.
+    let status = Command::new(bin_dir.join(exe("slangc")))
+        .arg("-version")
+        .status()
+        .expect("failed to run downloaded slangc");
+    if !status.success() {
+        panic!("downloaded slangc failed to run (`slangc -version` exited non-zero)");
+    }
+}
+
+/// The target operating system and CPU architecture this build produces
+/// artifacts for, as shipped in the shader-slang release tarballs. Read from
+/// the `CARGO_CFG_TARGET_*` variables cargo sets for build scripts. Errors
+/// (rather than silently falling back to a source build) for platforms or
+/// architectures the release does not cover.
+fn download_target() -> (&'static str, &'static str) {
+    let os = env::var("CARGO_CFG_TARGET_OS")
+        .unwrap_or_else(|_| panic!("CARGO_CFG_TARGET_OS is not set"));
+    let arch = env::var("CARGO_CFG_TARGET_ARCH")
+        .unwrap_or_else(|_| panic!("CARGO_CFG_TARGET_ARCH is not set"));
+    let os = match os.as_str() {
+        "linux" => "linux",
+        "macos" => "macos",
+        "windows" => "windows",
+        other => panic!(
+            "prebuilt shader-slang binaries are not available for the target \
+             operating system `{other}`; supported: linux, macos, windows"
+        ),
+    };
+    let arch = match arch.as_str() {
+        "x86_64" => "x86_64",
+        "aarch64" => "aarch64",
+        other => panic!(
+            "prebuilt shader-slang binaries are not available for the target \
+             CPU architecture `{other}`; supported: x86_64, aarch64"
+        ),
+    };
+    (os, arch)
 }
 
 /// Find the CMake output directory holding the `slangc` executable.
