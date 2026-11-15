@@ -360,21 +360,9 @@ fn write_layout_marker(artifact_root: &Path) {
     });
 }
 
-/// Run the `cmake` crate's configure+build, retrying once on failure.
-///
-/// The dxc sub-build (an old LLVM snapshot with its own makefiles) has
-/// parallel-build races observed on macOS (duplicate ar invocations,
-/// missing tablegen headers); an incremental retry resumes where the
-/// failed run left off and recovers from them. The `cmake` crate panics on
-/// a failed command, so the first attempt is run inside `catch_unwind` to
-/// allow the retry.
+/// Run the `cmake` crate's configure+build
 fn run_cmake_build(cmake_config: &mut CmakeConfig) {
-    let first_attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        cmake_config.build();
-    }));
-    if first_attempt.is_err() {
-        cmake_config.build();
-    }
+    cmake_config.build();
 }
 
 /// Install the built toolchain: `cmake --install <build_dir> --prefix
