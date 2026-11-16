@@ -25,3 +25,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Build and run tests
         run: cargo test --workspace
+      - name: Build and run tests (downloaded binaries)
+        run: |
+          $env:SHADER_SLANG_SRC_DOWNLOAD_BINARIES = "true"
+          cargo test --workspace

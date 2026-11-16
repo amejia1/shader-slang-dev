@@ -63,6 +63,18 @@ fn main() {
         "source"
     };
 
+    // Make the provenance visible in the build output (shown every time this
+    // script runs, i.e. whenever the provenance or the inputs change).
+    println!(
+        "cargo:warning=shader-slang-src: installing slang {} from {}",
+        slang_version(),
+        if download_binaries {
+            "downloaded release binaries"
+        } else {
+            "a source build"
+        }
+    );
+
     // Artifacts installed in a previous run belong to the provenance that
     // run used. When the provenance changes (the environment variable was
     // set or unset), remove the stale artifact root so the set provided
@@ -360,9 +372,21 @@ fn write_layout_marker(artifact_root: &Path) {
     });
 }
 
-/// Run the `cmake` crate's configure+build
+/// Run the `cmake` crate's configure+build, retrying once on failure.
+///
+/// The dxc sub-build (an old LLVM snapshot with its own makefiles) has
+/// parallel-build races observed on macOS (duplicate ar invocations,
+/// missing tablegen headers); an incremental retry resumes where the
+/// failed run left off and recovers from them. The `cmake` crate panics on
+/// a failed command, so the first attempt is run inside `catch_unwind` to
+/// allow the retry.
 fn run_cmake_build(cmake_config: &mut CmakeConfig) {
-    cmake_config.build();
+    let first_attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        cmake_config.build();
+    }));
+    if first_attempt.is_err() {
+        cmake_config.build();
+    }
 }
 
 /// Install the built toolchain: `cmake --install <build_dir> --prefix
@@ -541,18 +565,18 @@ fn download_slang(out_dir: &Path, artifact_root: &Path, bin_dir: &Path, lib_dir:
     // directories plus the license and documentation files. The `tar` crate
     // recreates the symlinks (e.g. `libslang-compiler.so` ->
     // `libslang-compiler.so.0.2026.21`) that a file copy would not.
+    //
+    // `Archive::unpack` is used rather than a per-entry `unpack_in` loop:
+    // it creates the destination directory first (a `unpack_in` call on a
+    // non-existent destination canonicalizes it and fails) and unpacks the
+    // directory entries after the files, so restrictive directory
+    // permissions cannot break the extraction.
     let file = fs::File::open(&tarball)
         .unwrap_or_else(|e| panic!("failed to open {}: {e}", tarball.display()));
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
-    let entries = archive
-        .entries()
-        .unwrap_or_else(|e| panic!("failed to read entries of {file_name}: {e}"));
-    for entry in entries {
-        let mut entry = entry.unwrap_or_else(|e| panic!("failed to read a {file_name} entry: {e}"));
-        entry
-            .unpack_in(artifact_root)
-            .unwrap_or_else(|e| panic!("failed to unpack {file_name}: {e}"));
-    }
+    archive
+        .unpack(artifact_root)
+        .unwrap_or_else(|e| panic!("failed to unpack {file_name}: {e}"));
     for (dir, label) in [
         (bin_dir, "bin"),
         (lib_dir, "lib"),

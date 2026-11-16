@@ -309,4 +309,25 @@ mod tests {
         assert_eq!(binary("slangc"), slangc());
         assert_readable_file(&binary("slangc"));
     }
+
+    #[test]
+    fn build_provenance_matches_request() {
+        // When SHADER_SLANG_SRC_DOWNLOAD_BINARIES changes, `cargo` re-runs
+        // the build script and recompiles the crate (the script re-emits
+        // the provenance as `SHADER_SLANG_SOURCE`), so the compile-time
+        // `SOURCE` constant must always match the variable as seen by this
+        // test process. A mismatch means the build did not follow the
+        // request.
+        let requested = std::env::var("SHADER_SLANG_SRC_DOWNLOAD_BINARIES");
+        let expected = if requested.as_deref().is_ok_and(|v| v == "true") {
+            "download"
+        } else {
+            "source"
+        };
+        assert_eq!(
+            SOURCE,
+            expected,
+            "artifacts came from `{SOURCE}`, but SHADER_SLANG_SRC_DOWNLOAD_BINARIES={requested:?} requested `{expected}`"
+        );
+    }
 }
