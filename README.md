@@ -83,10 +83,10 @@ artifact root (`<out_dir>/slang-artifact/`) with
 `cmake --install <build_dir> --prefix <artifact_root> --strip`. The install
 tree has the same layout as the shader-slang release tarballs:
 
-- `bin/` — the binaries (`slangc`, `slangd`, `slang`, `slangi`,
-  `slang-replay`), plus a copy of the standard-module tree: the statically
-  linked `slangc` resolves the loose standard modules relative to its own
-  executable, so the tree must sit next to the binary.
+- `bin/` — the binaries (`slangc`, `slangd`, `slang`, `slangi`), plus a
+  copy of the standard-module tree: the statically linked `slangc`
+  resolves the loose standard modules relative to its own executable, so
+  the tree must sit next to the binary.
 - `lib/` — the static libraries, the shared backend plugins (which `slangc`
   dlopens at runtime through the binaries' `$ORIGIN/../lib` RUNPATH), the
   standard-module tree, and the CMake package files.
@@ -129,7 +129,6 @@ The two provenances differ in what they provide:
 - The source build installs **static** libraries; the release tarballs ship
   **shared** libraries (and import `.lib` files on Windows) instead, plus
   the prebuilt `slang-llvm` backend plugin and `libgfx`.
-- `slang-replay` is only produced by the source build.
 
 The `shader-slang-src::SOURCE` constant (`"source"` or `"download"`) tells
 the two apart.

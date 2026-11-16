@@ -11,9 +11,9 @@ Ergonomic `PathBuf` accessors for the shader-slang toolchain installed by
 - `share_dir()` — the directory holding the installed share data (documentation under `doc/slang/`, agent skills under `slang/agent-skills/`).
 - `SLANG_VERSION` — the shader-slang release in use; `SOURCE` — how the artifacts were obtained (`"source"` or `"download"`).
 
-Availability of the static libraries and `slang-replay` depends on how the
-artifacts were obtained: `SOURCE == "source"` builds install static
-libraries and `slang-replay`, while `SOURCE == "download"` (prebuilt release
-tarballs) ship shared libraries instead.
+The libraries available depend on how the artifacts were obtained:
+`SOURCE == "source"` builds install the compiler and runtime as static
+libraries (`slang-compiler`, `slang-rt`), while `SOURCE == "download"`
+(prebuilt release tarballs) ship shared libraries instead.
 
 See the workspace `README.md` for a usage example.

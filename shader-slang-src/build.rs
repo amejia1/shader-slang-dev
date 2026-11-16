@@ -12,19 +12,10 @@ const SLANG_REPO_URL: &str = "https://github.com/shader-slang/slang.git";
 /// are downloaded from GitHub instead of built from source.
 const DOWNLOAD_ENV_VAR: &str = "SHADER_SLANG_SRC_DOWNLOAD_BINARIES";
 
-/// Programs built by slang; `slangc` is the compiler most consumers invoke;
-/// the rest are convenience. The install covers all of them except
-/// `slang-replay` (not marked `INSTALL` by slang), which is copied from the
-/// build tree.
-const SLANG_BINARIES: &[&str] = &["slangc", "slangd", "slangi", "slang", "slang-replay"];
-
 /// Plugins `slangc` dloads at runtime (glslang for SPIR-V via GLSL,
 /// glsl-module for GLSL source); each must be present as a shared library
 /// (a DLL on Windows) among the installed artifacts.
 const SLANG_PLUGINS: &[&str] = &["slang-glslang", "slang-glsl-module"];
-
-/// Library file extensions copied into the artifact `lib/` directory.
-const LIBRARY_EXTENSIONS: &[&str] = &["a", "lib", "so", "dylib", "dll"];
 
 /// Directory name under `OUT_DIR` holding the installed toolchain (the
 /// artifact root). Its layout matches the shader-slang release tarballs:
@@ -37,7 +28,7 @@ const ARTIFACT_ROOT_DIR: &str = "slang-artifact";
 /// whenever the expected artifact layout changes, so artifacts installed by
 /// an older revision of this script fail the completeness guard and are
 /// re-installed instead of being reused.
-const LAYOUT_MARKER: &str = "1";
+const LAYOUT_MARKER: &str = "3";
 
 fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is not set"));
@@ -96,6 +87,17 @@ fn main() {
     // artifacts already exist. Cargo already re-runs this script only when
     // needed, but this guard also makes repeated runs cheap.
     if !artifacts_complete(&artifact_root, &bin_dir, &lib_dir) {
+        // A fresh build or download starts from an empty artifact root, so
+        // the result contains exactly the files the `cmake --install` run
+        // (or the release tarball) provides.
+        if artifact_root.exists() {
+            fs::remove_dir_all(&artifact_root).unwrap_or_else(|e| {
+                panic!(
+                    "failed to remove stale artifact root {}: {e}",
+                    artifact_root.display()
+                )
+            });
+        }
         if download_binaries {
             download_slang(&out_dir, &artifact_root, &bin_dir, &lib_dir);
         } else {
@@ -318,10 +320,6 @@ fn build_slang(
     // build and the download provide the same layout.
     run_cmake_install(build_dir, artifact_root);
 
-    // The install covers only the targets slang marks `INSTALL`; copy in
-    // the remaining build outputs the artifact has always provided.
-    supplement_from_build_tree(build_dir, artifact_root, bin_dir, lib_dir);
-
     // Normalize the header location to the release layout (`include/`).
     collect_headers(artifact_root);
 
@@ -408,90 +406,6 @@ fn run_cmake_install(build_dir: &Path, artifact_root: &Path) {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-}
-
-/// `cmake --install` installs only the targets slang marks with `INSTALL`.
-/// Copy the remaining build outputs the artifact has always provided into
-/// the artifact root: the static libraries the compiler's static archive
-/// depends on (`core`, `compiler-core`, ...), which consumers link against
-/// via `lib_dir()`, and the `slang-replay` tool.
-fn supplement_from_build_tree(
-    build_dir: &Path,
-    artifact_root: &Path,
-    bin_dir: &Path,
-    lib_dir: &Path,
-) {
-    let build_bin_dir = find_bin_dir(build_dir).unwrap_or_else(|| {
-        panic!(
-            "slang build did not produce a `slangc` binary under {}",
-            build_dir.display()
-        )
-    });
-
-    // The executables the install did not produce.
-    for name in SLANG_BINARIES {
-        let dest = bin_dir.join(exe(name));
-        if !dest.is_file() {
-            if let Some(src) = find_file(&build_bin_dir, &exe(name)) {
-                copy(&src, &dest);
-            }
-        }
-    }
-
-    // The libraries the install did not produce, from the build `lib/`
-    // directory (the sibling of the build `bin/` directory).
-    if let Some(parent) = build_bin_dir.parent() {
-        let build_lib_dir = parent.join("lib");
-        if build_lib_dir.is_dir() {
-            let Ok(entries) = fs::read_dir(&build_lib_dir) else {
-                panic!("failed to read build lib dir {}", build_lib_dir.display());
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file() && has_ext(&path, LIBRARY_EXTENSIONS) {
-                    let dest = lib_dir.join(path.file_name().unwrap());
-                    if !dest.exists() {
-                        copy(&path, &dest);
-                    }
-                }
-            }
-        }
-    }
-    // The install must have produced the core artifacts; anything missing
-    // here is a broken layout, not a missing build output.
-    if !bin_dir.join(exe("slangc")).is_file() {
-        panic!(
-            "artifact {} has no `slangc` after supplementing from {}",
-            artifact_root.display(),
-            build_dir.display()
-        );
-    }
-}
-
-/// Find the CMake output directory holding the `slangc` executable.
-///
-/// CMake layouts vary by generator: single-config generators emit into
-/// `<build>/Release/bin` when slang overrides the output directories, while
-/// multi-config generators (Visual Studio, Ninja Multi-Config) use
-/// `<build>/<config>/bin`. Do not search the whole tree for `slangc`:
-/// CMake also leaves stub files named `slangc` next to per-target build
-/// rules, and picking one of those would make the sibling `lib/` lookup
-/// below point at an empty directory.
-fn find_bin_dir(build_dir: &Path) -> Option<PathBuf> {
-    let candidates = [
-        build_dir.join("Release").join("bin"),
-        build_dir.join("bin"),
-        build_dir.join("Release"),
-        build_dir.to_path_buf(),
-    ];
-    for candidate in candidates {
-        if candidate.join(exe("slangc")).is_file() {
-            return Some(candidate);
-        }
-    }
-
-    // Last resort: the first executable named `slangc` anywhere in the tree.
-    find_file(build_dir, &exe("slangc")).and_then(|path| path.parent().map(Path::to_path_buf))
 }
 
 /// The pinned slang release installs the public headers at the install
@@ -731,22 +645,6 @@ fn list_artifacts(artifact_root: &Path) {
             }
         }
     }
-}
-
-/// Recursively search `dir` for a file with the exact `name`.
-fn find_file(dir: &Path, name: &str) -> Option<PathBuf> {
-    let entries = fs::read_dir(dir).ok()?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            if let Some(found) = find_file(&path, name) {
-                return Some(found);
-            }
-        } else if path.file_name().and_then(|n| n.to_str()) == Some(name) {
-            return Some(path);
-        }
-    }
-    None
 }
 
 /// Recursively copy the tree rooted at `src` into `dst` (existing files are

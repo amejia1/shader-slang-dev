@@ -242,11 +242,6 @@ mod tests {
         for name in ["slangd", "slang", "slangi"] {
             assert_readable_file(&binary(name));
         }
-        // `slang-replay` is only produced by the source build; the release
-        // tarballs do not ship it.
-        if SOURCE == "source" {
-            assert_readable_file(&binary("slang-replay"));
-        }
     }
 
     #[test]
@@ -274,14 +269,9 @@ mod tests {
     #[test]
     fn libraries_exist_and_are_readable() {
         if SOURCE == "source" {
-            // The source build installs static libraries.
-            for name in [
-                "slang-compiler",
-                "core",
-                "compiler-core",
-                "slang-rt",
-                "slang-cpp-parser",
-            ] {
+            // The install produces the compiler and runtime as static
+            // libraries.
+            for name in ["slang-compiler", "slang-rt"] {
                 assert_readable_file(&static_lib_path(name));
             }
         } else {
