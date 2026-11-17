@@ -16,16 +16,11 @@ use std::path::PathBuf;
 /// The shader-slang release this crate builds (`2026.21`, tag `v2026.21`).
 pub const SLANG_VERSION: &str = "2026.21";
 
-/// Default value of the `SHADER_SLANG_SOURCE_URL` environment variable, used
-/// when the variable is unset or empty: the GitHub source archive of the
-/// `v2026.21` tag.
-pub const DEFAULT_SHADER_SLANG_SOURCE_URL: &str =
-    "https://github.com/shader-slang/slang/archive/refs/tags/v2026.21.tar.gz";
-
 /// The URL of the shader-slang source tarball `build.rs` used (a valid
-/// `https` or `file` URL): the value of the `SHADER_SLANG_SOURCE_URL`
-/// environment variable, or [`DEFAULT_SHADER_SLANG_SOURCE_URL`] when it was
-/// unset or empty. Emitted by `build.rs`.
+/// `https` or `file` URL), or the empty string when the
+/// `SHADER_SLANG_SOURCE_URL` environment variable was unset or empty — in
+/// that case `build.rs` cloned the `v2026.21` tag of the upstream repository
+/// with all its submodules instead. Emitted by `build.rs`.
 pub const SHADER_SLANG_SOURCE_URL: &str = env!("SHADER_SLANG_SOURCE_URL");
 
 /// The URL of the prebuilt distribution tarball `build.rs` used, or the
@@ -35,9 +30,9 @@ pub const SHADER_SLANG_SOURCE_URL: &str = env!("SHADER_SLANG_SOURCE_URL");
 pub const SHADER_SLANG_DIST_URL: &str = env!("SHADER_SLANG_DIST_URL");
 
 /// How the artifacts were obtained: `"source"` when `build.rs` compiled and
-/// installed shader-slang from the source tarball at
-/// [`SHADER_SLANG_SOURCE_URL`], or `"download"` when a prebuilt distribution
-/// tarball was provided through `SHADER_SLANG_DIST_URL`.
+/// installed shader-slang from source (a `SHADER_SLANG_SOURCE_URL` tarball or
+/// a git clone of the upstream repository), or `"download"` when a prebuilt
+/// distribution tarball was provided through `SHADER_SLANG_DIST_URL`.
 pub const SOURCE: &str = if SHADER_SLANG_DIST_URL.is_empty() {
     "source"
 } else {
@@ -343,11 +338,12 @@ mod tests {
 
     #[test]
     fn source_url_constant_matches_request() {
-        // Unset or empty SHADER_SLANG_SOURCE_URL must compile to the
-        // default tarball URL; a set value must be an https or file URL.
+        // Unset or empty SHADER_SLANG_SOURCE_URL must compile to the empty
+        // string (a git clone was used); a set value must be an https or
+        // file URL.
         let requested = std::env::var("SHADER_SLANG_SOURCE_URL").unwrap_or_default();
         if requested.is_empty() {
-            assert_eq!(SHADER_SLANG_SOURCE_URL, DEFAULT_SHADER_SLANG_SOURCE_URL);
+            assert_eq!(SHADER_SLANG_SOURCE_URL, "");
         } else {
             assert!(
                 SHADER_SLANG_SOURCE_URL.starts_with("https://")

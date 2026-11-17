@@ -7,13 +7,15 @@ and exposes the location of the installed binaries, libraries, headers and
 share directory.
 
 The shader-slang source is not vendored in this crate (a git submodule
-would make the crate too large to publish). Instead, `build.rs` fetches the
-source tarball from the `SHADER_SLANG_SOURCE_URL` environment variable — a
-valid `https` or `file` URL in the WHATWG URL standard; unset or empty
-defaults to the GitHub source archive of tag `v2026.21`,
-`https://github.com/shader-slang/slang/archive/refs/tags/v2026.21.tar.gz`
-— downloads or copies it into `$OUT_DIR`, extracts it there, and builds
-from the extracted tree.
+would make the crate too large to publish). By default `build.rs` clones
+tag `v2026.21` of the upstream repository with all its submodules into
+`$OUT_DIR` and builds from the clone. Alternatively, setting the
+`SHADER_SLANG_SOURCE_URL` environment variable to a non-empty `https` or
+`file` URL (in the WHATWG URL standard) makes `build.rs` fetch that source
+tarball into `$OUT_DIR` instead — downloading `https` URLs and copying
+`file` URLs — and extract it there; the tarball is expected to already
+contain the `external/` submodule checkouts (plain GitHub source archives
+do not, and are rejected).
 
 Setting the environment variable `SHADER_SLANG_DIST_URL` to a non-empty
 `https` or `file` URL of a prebuilt shader-slang distribution tarball makes

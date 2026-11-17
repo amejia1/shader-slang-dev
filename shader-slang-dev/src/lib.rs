@@ -33,11 +33,8 @@ use std::path::PathBuf;
 /// The shader-slang release built by the underlying `shader-slang-src` crate.
 pub use shader_slang_src::SLANG_VERSION;
 
-/// Default value of the `SHADER_SLANG_SOURCE_URL` environment variable used
-/// by the underlying `shader-slang-src` build.
-pub use shader_slang_src::DEFAULT_SHADER_SLANG_SOURCE_URL;
-
-/// The URL of the shader-slang source tarball the build used; see
+/// The URL of the shader-slang source tarball the build used, or `""` when
+/// `SHADER_SLANG_SOURCE_URL` was unset (a git clone was used); see
 /// [`shader_slang_src::SHADER_SLANG_SOURCE_URL`].
 pub use shader_slang_src::SHADER_SLANG_SOURCE_URL;
 
@@ -338,11 +335,12 @@ mod tests {
 
     #[test]
     fn source_url_constant_matches_request() {
-        // Unset or empty SHADER_SLANG_SOURCE_URL must compile to the
-        // default tarball URL; a set value must be an https or file URL.
+        // Unset or empty SHADER_SLANG_SOURCE_URL must compile to the empty
+        // string (a git clone was used); a set value must be an https or
+        // file URL.
         let requested = std::env::var("SHADER_SLANG_SOURCE_URL").unwrap_or_default();
         if requested.is_empty() {
-            assert_eq!(SHADER_SLANG_SOURCE_URL, DEFAULT_SHADER_SLANG_SOURCE_URL);
+            assert_eq!(SHADER_SLANG_SOURCE_URL, "");
         } else {
             assert!(
                 SHADER_SLANG_SOURCE_URL.starts_with("https://")

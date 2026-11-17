@@ -5,23 +5,19 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use url::Url;
 
-/// Upstream shader-slang repository. Used to fetch the pinned `external/`
-/// submodule checkouts when the source tarball does not carry them (GitHub
-/// source archives never do).
+/// Upstream shader-slang repository, cloned (with its submodules) when
+/// neither `SHADER_SLANG_SOURCE_URL` nor `SHADER_SLANG_DIST_URL` is set.
 const SLANG_REPO_URL: &str = "https://github.com/shader-slang/slang.git";
 
 /// The shader-slang release this crate builds (tag `v2026.21`).
 const SLANG_VERSION: &str = "2026.21";
 
 /// Environment variable holding the URL of the shader-slang source tarball.
-/// Accepts a valid `https` or `file` URL in the WHATWG URL standard; unset
-/// or empty means [`DEFAULT_SOURCE_URL`].
+/// When set to a non-empty string the value must be a valid `https` or
+/// `file` URL in the WHATWG URL standard; the tarball is then fetched into
+/// `$OUT_DIR` and must already contain the `external/` submodule checkouts.
+/// Unset or empty means no source tarball: the repository is cloned instead.
 const SOURCE_URL_ENV_VAR: &str = "SHADER_SLANG_SOURCE_URL";
-
-/// Default source tarball (used when [`SOURCE_URL_ENV_VAR`] is unset or
-/// empty): the GitHub source archive of the `v2026.21` tag.
-const DEFAULT_SOURCE_URL: &str =
-    "https://github.com/shader-slang/slang/archive/refs/tags/v2026.21.tar.gz";
 
 /// Environment variable holding the URL of a prebuilt shader-slang
 /// distribution tarball. Only checked for being set to a non-empty string;
@@ -69,9 +65,10 @@ fn main() {
     // script runs, i.e. whenever the provenance or the inputs change).
     println!(
         "cargo:warning=shader-slang-src: installing slang {SLANG_VERSION} from {}",
-        match &dist_url {
-            Some(url) => format!("the distribution tarball at {url}"),
-            None => format!("the source tarball at {source_url}"),
+        match (&dist_url, &source_url) {
+            (Some(url), _) => format!("the distribution tarball at {url}"),
+            (None, Some(url)) => format!("the source tarball at {url}"),
+            (None, None) => format!("a git clone of {SLANG_REPO_URL} at tag v{SLANG_VERSION}"),
         }
     );
 
@@ -110,7 +107,7 @@ fn main() {
         if let Some(dist_url) = &dist_url {
             install_dist(&out_dir, &artifact_root, &bin_dir, &lib_dir, dist_url);
         } else {
-            let slang_src = fetch_slang_source(&out_dir, &source_url);
+            let slang_src = resolve_slang_source(&out_dir, source_url.as_ref());
             build_slang(&slang_src, &build_dir, &artifact_root, &bin_dir, &lib_dir);
         }
     }
@@ -124,7 +121,7 @@ fn main() {
     );
     println!(
         "cargo::rustc-env=SHADER_SLANG_SOURCE_URL={}",
-        source_url.as_str()
+        source_url.as_ref().map_or("", |url| url.as_str())
     );
     println!(
         "cargo::rustc-env=SHADER_SLANG_DIST_URL={}",
@@ -137,17 +134,14 @@ fn main() {
     println!("cargo::rerun-if-env-changed={DIST_URL_ENV_VAR}");
 }
 
-/// Read `SHADER_SLANG_SOURCE_URL`, falling back to [`DEFAULT_SOURCE_URL`]
-/// when the variable is unset or empty, and parse it as a WHATWG URL
-/// restricted to the `https` and `file` schemes.
-fn source_url() -> Url {
-    let raw = env::var(SOURCE_URL_ENV_VAR).unwrap_or_default();
-    let value = if raw.is_empty() {
-        DEFAULT_SOURCE_URL
-    } else {
-        raw.as_str()
-    };
-    parse_url(SOURCE_URL_ENV_VAR, value)
+/// Read `SHADER_SLANG_SOURCE_URL`: `None` when the variable is unset or set
+/// to the empty string, otherwise the parsed URL (restricted to the `https`
+/// and `file` schemes).
+fn source_url() -> Option<Url> {
+    match env::var(SOURCE_URL_ENV_VAR) {
+        Ok(value) if !value.is_empty() => Some(parse_url(SOURCE_URL_ENV_VAR, &value)),
+        _ => None,
+    }
 }
 
 /// Read `SHADER_SLANG_DIST_URL`: `None` when the variable is unset or set to
@@ -242,9 +236,22 @@ fn extract_tarball(tarball: &Path, dest: &Path) -> PathBuf {
     }
 }
 
+/// Return the directory containing the slang source tree to build: the
+/// extracted `SHADER_SLANG_SOURCE_URL` tarball when set, otherwise a fresh
+/// (or reused) clone of the release tag with all submodules.
+fn resolve_slang_source(out_dir: &Path, source_url: Option<&Url>) -> PathBuf {
+    match source_url {
+        Some(url) => fetch_slang_source(out_dir, url),
+        None => clone_slang(&format!("v{SLANG_VERSION}"), &out_dir.join("slang-src")),
+    }
+}
+
 /// Fetch the shader-slang source tarball at `source_url` into `out_dir`,
 /// extract it under `out_dir` and return the extracted source tree (the
-/// directory containing `CMakeLists.txt`).
+/// directory containing `CMakeLists.txt`). The tarball is expected to
+/// already carry the `external/` submodule checkouts (e.g. a `git archive`
+/// of a fully checked-out tree): plain GitHub source archives do not
+/// include them and are rejected here.
 fn fetch_slang_source(out_dir: &Path, source_url: &Url) -> PathBuf {
     let tarball = fetch_tarball(source_url, &out_dir.join("source"), SOURCE_URL_ENV_VAR);
     let root = extract_tarball(&tarball, &out_dir.join("source-extracted"));
@@ -254,45 +261,57 @@ fn fetch_slang_source(out_dir: &Path, source_url: &Url) -> PathBuf {
             root.display()
         );
     }
-    init_slang_submodules(&root);
+    if !submodules_present(&root) {
+        panic!(
+            "the source tarball at {source_url} does not contain the `external/` submodule \
+             checkouts; provide a tarball that includes them (e.g. a `git archive` of a \
+             fully checked-out tree), or leave {SOURCE_URL_ENV_VAR} unset to clone the \
+             repository with its submodules"
+        );
+    }
     root
 }
 
-/// Populate the `external/` submodule checkouts of an extracted source
-/// tarball. GitHub source archives do not carry submodule contents, so the
-/// tarball alone is not enough to build: reconstruct just enough git
-/// metadata to resolve the pinned gitlinks — `git init`, fetch the release
-/// tag from the upstream repository and load its tree into the index —
-/// then run `git submodule update --init --recursive`. Skipped when the
-/// extracted tree already carries the submodule contents (e.g. a
-/// pre-packed tarball).
-fn init_slang_submodules(slang_src: &Path) {
-    if submodules_present(slang_src) {
-        return;
+/// Clone the slang release tag (shallow, with all submodules recursively
+/// cloned) into `dir`, reusing a previous clone when present, and return
+/// the clone directory.
+fn clone_slang(tag: &str, dir: &Path) -> PathBuf {
+    if dir.join("CMakeLists.txt").is_file() {
+        return dir.to_path_buf();
     }
-    let tag = format!("v{SLANG_VERSION}");
-    run_git(slang_src, &["init", "-q"]);
-    run_git(slang_src, &["remote", "add", "origin", SLANG_REPO_URL]);
-    run_git(slang_src, &["fetch", "-q", "--depth", "1", "origin", &tag]);
-    // Load the fetched tree into the index (the worktree is left untouched)
-    // so the pinned gitlink SHAs are visible to `git submodule update`.
-    run_git(slang_src, &["reset", "-q", "FETCH_HEAD"]);
+    if dir.exists() {
+        fs::remove_dir_all(dir).expect("failed to remove incomplete slang clone");
+    }
+    let parent = dir.parent().expect("clone dir has no parent");
+    fs::create_dir_all(parent).expect("failed to create clone parent dir");
+    let name = dir
+        .file_name()
+        .expect("clone dir has no name")
+        .to_string_lossy()
+        .into_owned();
     run_git(
-        slang_src,
+        parent,
         &[
-            "submodule",
-            "update",
-            "--init",
-            "--recursive",
+            "clone",
             "--depth",
             "1",
+            "--branch",
+            tag,
+            "--recurse-submodules",
+            "--shallow-submodules",
+            SLANG_REPO_URL,
+            name.as_str(),
         ],
     );
+    if !dir.join("CMakeLists.txt").is_file() {
+        panic!("slang clone at {} is missing CMakeLists.txt", dir.display());
+    }
+    dir.to_path_buf()
 }
 
 /// Whether every submodule path listed in `.gitmodules` is already a
 /// non-empty directory (i.e. the source already carries the checkouts).
-/// A missing `.gitmodules` means there is nothing to fetch.
+/// A missing `.gitmodules` means there is nothing to check.
 fn submodules_present(slang_src: &Path) -> bool {
     let Ok(contents) = fs::read_to_string(slang_src.join(".gitmodules")) else {
         return true;
@@ -320,9 +339,9 @@ fn submodules_present(slang_src: &Path) -> bool {
 /// Run `git <args>` in `dir`, panicking on failure.
 ///
 /// `core.longpaths=true` lets Git for Windows check out long file names: the
-/// extracted source tree lives under the deep `$OUT_DIR` path, and some
-/// slang submodules carry files whose full paths would exceed the default
-/// Windows MAX_PATH limit. The option is a no-op on other platforms.
+/// clone lives under the deep `$OUT_DIR` path, and some slang submodules
+/// carry files whose full paths would exceed the default Windows MAX_PATH
+/// limit. The option is a no-op on other platforms.
 fn run_git(dir: &Path, args: &[&str]) {
     let status = Command::new("git")
         .arg("-c")
@@ -330,7 +349,7 @@ fn run_git(dir: &Path, args: &[&str]) {
         .args(args)
         .current_dir(dir)
         .status()
-        .expect("failed to run `git` (required to fetch the slang submodules)");
+        .expect("failed to run `git` (required to clone the slang repository)");
     if !status.success() {
         panic!("`git {}` failed in {}", args.join(" "), dir.display());
     }
@@ -423,10 +442,9 @@ fn build_slang(
         .define("SLANG_ENABLE_GFX", "OFF")
         .define("SLANG_ENABLE_SLANG_GLSLANG", "ON");
     // Pin the version from this crate's pinned slang release. Slang
-    // otherwise derives it from git tags, which the fetched tree (and
-    // shallow checkouts) do not carry; without a tag it falls back to
-    // 0.0.0 and the versioned plugin file names would not match what the
-    // crate promises.
+    // otherwise derives it from git tags, which shallow checkouts do not
+    // carry; without a tag it falls back to 0.0.0 and the versioned plugin
+    // file names would not match what the crate promises.
     cmake_config
         .define("SLANG_VERSION_NUMERIC", SLANG_VERSION)
         .define("SLANG_VERSION_FULL", SLANG_VERSION);

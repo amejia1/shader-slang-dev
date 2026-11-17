@@ -11,15 +11,17 @@ build = "build.rs"
 readme = "README.md"
 
 # This crate does not vendor the shader-slang source (a git submodule would
-# make the crate too large to publish). Instead, build.rs fetches the
-# shader-slang source tarball from the SHADER_SLANG_SOURCE_URL environment
-# variable (a valid https or file URL in the WHATWG URL standard; unset or
-# empty defaults to the GitHub source archive of the v2026.21 tag),
-# downloads or copies it into $OUT_DIR and extracts it there, then builds it
-# with CMake through the `cmake` crate. When SHADER_SLANG_DIST_URL is set to
-# a non-empty https or file URL, build.rs instead fetches that prebuilt
-# distribution tarball with `ureq` and extracts it with `tar` and `flate2`,
-# using the extracted directory as the installed toolchain.
+# make the crate too large to publish). By default — SHADER_SLANG_SOURCE_URL
+# and SHADER_SLANG_DIST_URL both unset or empty — build.rs clones the
+# shader-slang repository at tag v2026.21 with --recurse-submodules into
+# $OUT_DIR and builds from the clone with CMake through the `cmake` crate.
+# When SHADER_SLANG_SOURCE_URL is set to a non-empty https or file URL,
+# build.rs instead fetches that source tarball with `ureq` (or copies it for
+# file URLs) into $OUT_DIR and extracts it with `tar` and `flate2`; the
+# tarball must already contain the external/ submodule checkouts. When
+# SHADER_SLANG_DIST_URL is set to a non-empty https or file URL, build.rs
+# fetches that prebuilt distribution tarball and uses the extracted
+# directory as the installed toolchain, skipping the source build.
 
 [build-dependencies]
 cmake = "0.1"
