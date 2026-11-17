@@ -318,8 +318,15 @@ fn submodules_present(slang_src: &Path) -> bool {
 }
 
 /// Run `git <args>` in `dir`, panicking on failure.
+///
+/// `core.longpaths=true` lets Git for Windows check out long file names: the
+/// extracted source tree lives under the deep `$OUT_DIR` path, and some
+/// slang submodules carry files whose full paths would exceed the default
+/// Windows MAX_PATH limit. The option is a no-op on other platforms.
 fn run_git(dir: &Path, args: &[&str]) {
     let status = Command::new("git")
+        .arg("-c")
+        .arg("core.longpaths=true")
         .args(args)
         .current_dir(dir)
         .status()
