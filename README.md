@@ -1,19 +1,17 @@
 # shader-slang-dev
 
-Rust crates for building the [shader-slang](https://github.com/shader-slang/slang)
-compiler toolchain (`slangc` and friends) from source and locating the built
+A Rust crate that builds the [shader-slang](https://github.com/shader-slang/slang)
+compiler toolchain (`slangc` and friends) from source and locates the built
 artifacts from another crate's `build.rs`:
 
-- **`shader-slang-src`** builds the shader-slang `2026.21` toolchain from
+- **`shader-slang-dev`** builds the shader-slang `2026.21` toolchain from
   source with static linking enabled and installs it in the same layout as
-  the shader-slang release tarballs. The shader-slang source is not vendored
-  in this repository (a submodule would make the crate too large to
-  publish); by default `build.rs` clones tag `v2026.21` with all submodules
-  into `$OUT_DIR`, or fetches a source tarball from `SHADER_SLANG_SOURCE_URL`
-  when that variable is set.
-- **`shader-slang-dev`** depends on `shader-slang-src` and exposes `PathBuf`
-  accessors for the installed binaries, libraries, headers and share
-  directory.
+  the shader-slang release tarballs, and exposes `PathBuf` accessors for the
+  installed binaries, libraries, headers and share directory. The
+  shader-slang source is not vendored in this repository (a submodule would
+  make the crate too large to publish); by default `build.rs` clones tag
+  `v2026.21` with all submodules into `$OUT_DIR`, or fetches a source tarball
+  from `SHADER_SLANG_SOURCE_URL` when that variable is set.
 
 ## Usage
 
@@ -37,23 +35,16 @@ fn main() {
 
 ## Versioning
 
-`shader-slang-src` is versioned with plain semver (`1.0.0`); the crate does
-not carry the slang release as `+<version>` build metadata. The
-shader-slang release it builds is `2026.21`, pinned by the git tag
-`v2026.21` that `build.rs` clones by default. To build from a source
-tarball instead, point `SHADER_SLANG_SOURCE_URL` at a tarball of that
-release (see below).
-
-`shader-slang-dev` depends on `shader-slang-src = "1"` (caret), so a fresh
-dependency resolution picks the latest published `1.x` of
-`shader-slang-src` — just depend on `shader-slang-dev` and you get the
-newest published release. Existing `Cargo.lock` files keep their locked
-`shader-slang-src` version until you run `cargo update`.
+The crate is versioned with plain semver (`1.0.0`); it does not carry the
+slang release as `+<version>` build metadata. The shader-slang release it
+builds is `2026.21`, pinned by the git tag `v2026.21` that `build.rs` clones
+by default. To build from a source tarball instead, point
+`SHADER_SLANG_SOURCE_URL` at a tarball of that release (see below).
 
 ## How it builds
 
-`shader-slang-src`'s `build.rs` obtains the shader-slang source into
-`$OUT_DIR` in one of two ways:
+`build.rs` obtains the shader-slang source into `$OUT_DIR` in one of two
+ways:
 
 - **Default (both URL variables unset or empty):** a shallow git clone of
   `https://github.com/shader-slang/slang.git` at tag `v2026.21` with
@@ -118,9 +109,9 @@ The two provenances differ in what they provide:
   ship **shared** libraries (and import `.lib` files on Windows) instead,
   plus the prebuilt `slang-llvm` backend plugin and `libgfx`.
 
-The `shader-slang-src::SOURCE` constant (`"source"` or `"download"`) tells
+The `shader_slang_dev::SOURCE` constant (`"source"` or `"download"`) tells
 the two apart. The URLs the build used are exposed as the
-`shader-slang-src::SHADER_SLANG_SOURCE_URL` and
-`shader-slang-src::SHADER_SLANG_DIST_URL` constants (both are `""` when the
+`shader_slang_dev::SHADER_SLANG_SOURCE_URL` and
+`shader_slang_dev::SHADER_SLANG_DIST_URL` constants (both are `""` when the
 corresponding variable was unset or empty; an empty
 `SHADER_SLANG_SOURCE_URL` means the source came from a git clone).

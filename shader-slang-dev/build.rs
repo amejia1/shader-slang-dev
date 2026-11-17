@@ -64,7 +64,7 @@ fn main() {
     // Make the provenance visible in the build output (shown every time this
     // script runs, i.e. whenever the provenance or the inputs change).
     println!(
-        "cargo:warning=shader-slang-src: installing slang {SLANG_VERSION} from {}",
+        "cargo:warning=shader-slang-dev: installing slang {SLANG_VERSION} from {}",
         match (&dist_url, &source_url) {
             (Some(url), _) => format!("the distribution tarball at {url}"),
             (None, Some(url)) => format!("the source tarball at {url}"),
@@ -179,7 +179,7 @@ fn fetch_tarball(url: &Url, dir: &Path, env_var: &str) -> PathBuf {
     match url.scheme() {
         "https" => {
             let response = ureq::get(url.as_str())
-                .header("user-agent", "shader-slang-src")
+                .header("user-agent", "shader-slang-dev")
                 .call()
                 .unwrap_or_else(|e| panic!("failed to download {url} ({env_var}): {e}"));
             let mut file = fs::File::create(&tarball)
@@ -716,12 +716,12 @@ fn collect_files(dir: &Path) -> Vec<PathBuf> {
 ///
 /// The `share/` tree is large (it carries the full documentation), so it is
 /// listed one level only. Cargo records build-script stdout in
-/// `target/<profile>/build/shader-slang-src-*/output`, so a later
+/// `target/<profile>/build/shader-slang-dev-*/output`, so a later
 /// "missing file" failure can be compared against exactly what this build
 /// installed.
 fn list_artifacts(artifact_root: &Path) {
     println!(
-        "shader-slang-src: installed files under {}:",
+        "shader-slang-dev: installed files under {}:",
         artifact_root.display()
     );
     for dir in ["bin", "lib", "include"] {

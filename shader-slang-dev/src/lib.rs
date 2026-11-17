@@ -1,10 +1,13 @@
-//! Locate the shader-slang binaries and libraries installed by
-//! [`shader_slang_src`].
+//! Build the [shader-slang](https://github.com/shader-slang/slang) compiler
+//! toolchain (`slangc` and friends) from source and locate the built
+//! artifacts from another crate's `build.rs`.
 //!
-//! This crate is the ergonomic accessor over `shader-slang-src`: it pulls in
-//! the source-build crate as a regular dependency and exposes `PathBuf`
-//! accessors for the `slangc` binary, the other binaries, and the library,
-//! include and share directories.
+//! This crate's `build.rs` installs the toolchain into this crate's
+//! `OUT_DIR` in the same layout as the shader-slang release tarballs:
+//! `bin/` (binaries), `lib/` (static or shared libraries and the
+//! standard-module tree), `include/` (headers) and `share/` (documentation
+//! and data). The paths returned here are stable for the lifetime of a
+//! single build graph.
 //!
 //! Typical use is from another crate's `build.rs`:
 //!
@@ -30,59 +33,79 @@
 
 use std::path::PathBuf;
 
-/// The shader-slang release built by the underlying `shader-slang-src` crate.
-pub use shader_slang_src::SLANG_VERSION;
+/// The shader-slang release this crate builds (`2026.21`, tag `v2026.21`).
+pub const SLANG_VERSION: &str = "2026.21";
 
-/// The URL of the shader-slang source tarball the build used, or `""` when
-/// `SHADER_SLANG_SOURCE_URL` was unset (a git clone was used); see
-/// [`shader_slang_src::SHADER_SLANG_SOURCE_URL`].
-pub use shader_slang_src::SHADER_SLANG_SOURCE_URL;
+/// The URL of the shader-slang source tarball `build.rs` used (a valid
+/// `https` or `file` URL), or the empty string when the
+/// `SHADER_SLANG_SOURCE_URL` environment variable was unset or empty — in
+/// that case `build.rs` cloned the `v2026.21` tag of the upstream repository
+/// with all its submodules instead. Emitted by `build.rs`.
+pub const SHADER_SLANG_SOURCE_URL: &str = env!("SHADER_SLANG_SOURCE_URL");
 
-/// The URL of the prebuilt distribution tarball the build used, or `""` when
-/// `SHADER_SLANG_DIST_URL` was unset; see [`shader_slang_src::SHADER_SLANG_DIST_URL`].
-pub use shader_slang_src::SHADER_SLANG_DIST_URL;
+/// The URL of the prebuilt distribution tarball `build.rs` used, or the
+/// empty string when the `SHADER_SLANG_DIST_URL` environment variable was
+/// unset or empty (a valid `https` or `file` URL otherwise). Emitted by
+/// `build.rs`.
+pub const SHADER_SLANG_DIST_URL: &str = env!("SHADER_SLANG_DIST_URL");
 
-/// How the artifacts were obtained (`"source"` or `"download"`); see
-/// [`shader_slang_src::SOURCE`].
-pub use shader_slang_src::SOURCE;
+/// How the artifacts were obtained: `"source"` when `build.rs` compiled and
+/// installed shader-slang from source (a `SHADER_SLANG_SOURCE_URL` tarball or
+/// a git clone of the upstream repository), or `"download"` when a prebuilt
+/// distribution tarball was provided through `SHADER_SLANG_DIST_URL`.
+pub const SOURCE: &str = if SHADER_SLANG_DIST_URL.is_empty() {
+    "source"
+} else {
+    "download"
+};
 
 /// Directory containing all installed artifacts: the `bin/`, `lib/`,
 /// `include/` and `share/` directories plus the license and documentation
 /// files.
 pub fn artifact_root() -> PathBuf {
-    shader_slang_src::artifact_root()
+    PathBuf::from(env!("SHADER_SLANG_ARTIFACT_ROOT"))
 }
 
 /// Directory containing the built binaries (`slangc`, `slangd`, ...).
 pub fn bin_dir() -> PathBuf {
-    shader_slang_src::bin_dir()
+    artifact_root().join("bin")
 }
 
-/// Directory containing the built static/shared libraries; use as an `-L` flag.
+/// Directory containing the built static and shared libraries; suitable for a
+/// `-L` linker flag or using as `cargo::rustc-link-search=[KIND=]<dir>` in cargo build script.
 pub fn lib_dir() -> PathBuf {
-    shader_slang_src::lib_dir()
+    artifact_root().join("lib")
 }
 
-/// Directory containing the slang headers; use as an `-I` flag.
+/// Directory containing the slang public headers (`slang.h`, ...); suitable
+/// for an `-I` compiler flag.
 pub fn include_dir() -> PathBuf {
-    shader_slang_src::include_dir()
+    artifact_root().join("include")
 }
 
 /// Directory containing the installed `share/` data (`doc/slang/`
 /// documentation, `slang/agent-skills/`).
 pub fn share_dir() -> PathBuf {
-    shader_slang_src::share_dir()
+    artifact_root().join("share")
 }
 
 /// Path to the `slangc` compiler executable.
 pub fn slangc() -> PathBuf {
-    shader_slang_src::slangc()
+    binary("slangc")
 }
 
 /// Path to a named binary under [`bin_dir`] (the platform `.exe` suffix is
 /// added automatically on Windows).
 pub fn binary(name: &str) -> PathBuf {
-    shader_slang_src::binary(name)
+    bin_dir().join(exe_name(name))
+}
+
+fn exe_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    }
 }
 
 #[cfg(test)]

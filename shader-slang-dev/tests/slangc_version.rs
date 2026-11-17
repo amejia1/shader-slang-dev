@@ -1,6 +1,5 @@
-//! Integration test: run the `slangc` binary built by the underlying
-//! `shader-slang-src` crate and check that it reports the expected
-//! shader-slang release.
+//! Integration test: run the `slangc` binary built by this crate and check
+//! that it reports the expected shader-slang release.
 
 use std::process::Command;
 
