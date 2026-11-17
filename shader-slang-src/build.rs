@@ -3,14 +3,33 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use url::Url;
 
-/// Upstream shader-slang repository.
+/// Upstream shader-slang repository. Used to fetch the pinned `external/`
+/// submodule checkouts when the source tarball does not carry them (GitHub
+/// source archives never do).
 const SLANG_REPO_URL: &str = "https://github.com/shader-slang/slang.git";
 
-/// Environment variable that switches the artifact provenance: when set to
-/// exactly `"true"` (case-sensitive), prebuilt shader-slang release binaries
-/// are downloaded from GitHub instead of built from source.
-const DOWNLOAD_ENV_VAR: &str = "SHADER_SLANG_SRC_DOWNLOAD_BINARIES";
+/// The shader-slang release this crate builds (tag `v2026.21`).
+const SLANG_VERSION: &str = "2026.21";
+
+/// Environment variable holding the URL of the shader-slang source tarball.
+/// Accepts a valid `https` or `file` URL in the WHATWG URL standard; unset
+/// or empty means [`DEFAULT_SOURCE_URL`].
+const SOURCE_URL_ENV_VAR: &str = "SHADER_SLANG_SOURCE_URL";
+
+/// Default source tarball (used when [`SOURCE_URL_ENV_VAR`] is unset or
+/// empty): the GitHub source archive of the `v2026.21` tag.
+const DEFAULT_SOURCE_URL: &str =
+    "https://github.com/shader-slang/slang/archive/refs/tags/v2026.21.tar.gz";
+
+/// Environment variable holding the URL of a prebuilt shader-slang
+/// distribution tarball. Only checked for being set to a non-empty string;
+/// the value must then be a valid `https` or `file` URL in the WHATWG URL
+/// standard. When set, the tarball is fetched and extracted under `OUT_DIR`
+/// and the extracted directory serves as the installed toolchain, skipping
+/// the source build.
+const DIST_URL_ENV_VAR: &str = "SHADER_SLANG_DIST_URL";
 
 /// Plugins `slangc` dloads at runtime (glslang for SPIR-V via GLSL,
 /// glsl-module for GLSL source); each must be present as a shared library
@@ -32,44 +51,34 @@ const LAYOUT_MARKER: &str = "3";
 
 fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is not set"));
-    let manifest_dir =
-        PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is not set"));
 
-    // The slang release this crate builds comes from its `+<version>` build
-    // metadata (e.g. `1.0.0+2026.21` -> `2026.21`, tag `v2026.21`).
-    let slang_tag = format!("v{}", slang_version());
+    let source_url = source_url();
+    let dist_url = dist_url();
+    let source = if dist_url.is_some() {
+        "download"
+    } else {
+        "source"
+    };
 
     let build_dir = out_dir.join("build");
     let artifact_root = out_dir.join(ARTIFACT_ROOT_DIR);
     let bin_dir = artifact_root.join("bin");
     let lib_dir = artifact_root.join("lib");
 
-    // When SHADER_SLANG_SRC_DOWNLOAD_BINARIES is set to exactly "true"
-    // (case-sensitive), download the prebuilt shader-slang release binaries
-    // from GitHub instead of building them from source.
-    let download_binaries = env::var(DOWNLOAD_ENV_VAR).is_ok_and(|value| value == "true");
-    let source = if download_binaries {
-        "download"
-    } else {
-        "source"
-    };
-
     // Make the provenance visible in the build output (shown every time this
     // script runs, i.e. whenever the provenance or the inputs change).
     println!(
-        "cargo:warning=shader-slang-src: installing slang {} from {}",
-        slang_version(),
-        if download_binaries {
-            "downloaded release binaries"
-        } else {
-            "a source build"
+        "cargo:warning=shader-slang-src: installing slang {SLANG_VERSION} from {}",
+        match &dist_url {
+            Some(url) => format!("the distribution tarball at {url}"),
+            None => format!("the source tarball at {source_url}"),
         }
     );
 
     // Artifacts installed in a previous run belong to the provenance that
-    // run used. When the provenance changes (the environment variable was
-    // set or unset), remove the stale artifact root so the set provided
-    // below always matches the current provenance.
+    // run used. When the provenance changes (SHADER_SLANG_DIST_URL was set
+    // or unset), remove the stale artifact root so the set provided below
+    // always matches the current provenance.
     let provenance_file = out_dir.join(".slang-artifact-source");
     let same_provenance = fs::read_to_string(&provenance_file)
         .map(|previous| previous.trim() == source)
@@ -89,7 +98,7 @@ fn main() {
     if !artifacts_complete(&artifact_root, &bin_dir, &lib_dir) {
         // A fresh build or download starts from an empty artifact root, so
         // the result contains exactly the files the `cmake --install` run
-        // (or the release tarball) provides.
+        // (or the distribution tarball) provides.
         if artifact_root.exists() {
             fs::remove_dir_all(&artifact_root).unwrap_or_else(|e| {
                 panic!(
@@ -98,29 +107,226 @@ fn main() {
                 )
             });
         }
-        if download_binaries {
-            download_slang(&out_dir, &artifact_root, &bin_dir, &lib_dir);
+        if let Some(dist_url) = &dist_url {
+            install_dist(&out_dir, &artifact_root, &bin_dir, &lib_dir, dist_url);
         } else {
-            let slang_src = resolve_slang_source(&manifest_dir, &out_dir, &slang_tag);
+            let slang_src = fetch_slang_source(&out_dir, &source_url);
             build_slang(&slang_src, &build_dir, &artifact_root, &bin_dir, &lib_dir);
         }
     }
     fs::write(&provenance_file, source)
         .unwrap_or_else(|e| panic!("failed to write {}: {e}", provenance_file.display()));
 
-    // Expose the artifact root to the library so it can locate the binaries
-    // and libraries it installed.
+    // Expose the artifact root and the URL configuration to the library.
     println!(
         "cargo::rustc-env=SHADER_SLANG_ARTIFACT_ROOT={}",
         artifact_root.display()
     );
-    println!("cargo::rustc-env=SHADER_SLANG_VERSION={}", slang_version());
-    println!("cargo::rustc-env=SHADER_SLANG_SOURCE={}", source);
-    // Re-run if the vendored submodule or this script changes.
-    println!("cargo::rerun-if-changed=slang");
+    println!(
+        "cargo::rustc-env=SHADER_SLANG_SOURCE_URL={}",
+        source_url.as_str()
+    );
+    println!(
+        "cargo::rustc-env=SHADER_SLANG_DIST_URL={}",
+        dist_url.as_ref().map_or("", |url| url.as_str())
+    );
+    // Re-run if this script changes.
     println!("cargo::rerun-if-changed=build.rs");
-    // Re-run when the download/build provenance switches.
-    println!("cargo::rerun-if-env-changed=SHADER_SLANG_SRC_DOWNLOAD_BINARIES");
+    // Re-run when the source or distribution URL changes.
+    println!("cargo::rerun-if-env-changed={SOURCE_URL_ENV_VAR}");
+    println!("cargo::rerun-if-env-changed={DIST_URL_ENV_VAR}");
+}
+
+/// Read `SHADER_SLANG_SOURCE_URL`, falling back to [`DEFAULT_SOURCE_URL`]
+/// when the variable is unset or empty, and parse it as a WHATWG URL
+/// restricted to the `https` and `file` schemes.
+fn source_url() -> Url {
+    let raw = env::var(SOURCE_URL_ENV_VAR).unwrap_or_default();
+    let value = if raw.is_empty() {
+        DEFAULT_SOURCE_URL
+    } else {
+        raw.as_str()
+    };
+    parse_url(SOURCE_URL_ENV_VAR, value)
+}
+
+/// Read `SHADER_SLANG_DIST_URL`: `None` when the variable is unset or set to
+/// the empty string, otherwise the parsed URL (restricted to the `https`
+/// and `file` schemes).
+fn dist_url() -> Option<Url> {
+    match env::var(DIST_URL_ENV_VAR) {
+        Ok(value) if !value.is_empty() => Some(parse_url(DIST_URL_ENV_VAR, &value)),
+        _ => None,
+    }
+}
+
+/// Parse `value` as a WHATWG URL and require the `https` or `file` scheme.
+fn parse_url(env_var: &str, value: &str) -> Url {
+    let url =
+        Url::parse(value).unwrap_or_else(|e| panic!("{env_var} is not a valid URL ({value}): {e}"));
+    match url.scheme() {
+        "https" | "file" => url,
+        scheme => {
+            panic!("{env_var} must use the `https` or `file` scheme, got `{scheme}`: {value}")
+        }
+    }
+}
+
+/// Fetch the tarball at `url` into `dir` — downloading `https` URLs and
+/// copying `file` URLs — and return the local tarball path.
+fn fetch_tarball(url: &Url, dir: &Path, env_var: &str) -> PathBuf {
+    fs::create_dir_all(dir).unwrap_or_else(|e| panic!("failed to create {}: {e}", dir.display()));
+    let name = url
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("archive.tar.gz");
+    let tarball = dir.join(name);
+    match url.scheme() {
+        "https" => {
+            let response = ureq::get(url.as_str())
+                .header("user-agent", "shader-slang-src")
+                .call()
+                .unwrap_or_else(|e| panic!("failed to download {url} ({env_var}): {e}"));
+            let mut file = fs::File::create(&tarball)
+                .unwrap_or_else(|e| panic!("failed to create {}: {e}", tarball.display()));
+            std::io::copy(&mut response.into_body().into_reader(), &mut file)
+                .unwrap_or_else(|e| panic!("failed to write {}: {e}", tarball.display()));
+        }
+        "file" => {
+            let path = url
+                .to_file_path()
+                .unwrap_or_else(|_| panic!("{env_var} is not a valid file URL: {url}"));
+            fs::copy(&path, &tarball).unwrap_or_else(|e| {
+                panic!(
+                    "failed to copy {} to {} ({env_var}): {e}",
+                    path.display(),
+                    tarball.display()
+                )
+            });
+        }
+        scheme => unreachable!("scheme `{scheme}` was rejected by parse_url"),
+    }
+    tarball
+}
+
+/// Extract the gzipped tarball at `tarball` into `dest` (recreated when it
+/// already exists) and return the directory holding the archive's root
+/// entries: the archive's single top-level directory when it has exactly
+/// one, `dest` itself otherwise.
+///
+/// `Archive::unpack` is used rather than a per-entry `unpack_in` loop: it
+/// creates the destination directory first (a `unpack_in` call on a
+/// non-existent destination canonicalizes it and fails) and unpacks the
+/// directory entries after the files, so restrictive directory permissions
+/// cannot break the extraction.
+fn extract_tarball(tarball: &Path, dest: &Path) -> PathBuf {
+    if dest.exists() {
+        fs::remove_dir_all(dest)
+            .unwrap_or_else(|e| panic!("failed to remove {}: {e}", dest.display()));
+    }
+    let file = fs::File::open(tarball)
+        .unwrap_or_else(|e| panic!("failed to open {}: {e}", tarball.display()));
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
+    archive
+        .unpack(dest)
+        .unwrap_or_else(|e| panic!("failed to unpack {}: {e}", tarball.display()));
+    let entries: Vec<_> = fs::read_dir(dest)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", dest.display()))
+        .flatten()
+        .collect();
+    if entries.len() == 1 && entries[0].path().is_dir() {
+        entries[0].path()
+    } else {
+        dest.to_path_buf()
+    }
+}
+
+/// Fetch the shader-slang source tarball at `source_url` into `out_dir`,
+/// extract it under `out_dir` and return the extracted source tree (the
+/// directory containing `CMakeLists.txt`).
+fn fetch_slang_source(out_dir: &Path, source_url: &Url) -> PathBuf {
+    let tarball = fetch_tarball(source_url, &out_dir.join("source"), SOURCE_URL_ENV_VAR);
+    let root = extract_tarball(&tarball, &out_dir.join("source-extracted"));
+    if !root.join("CMakeLists.txt").is_file() {
+        panic!(
+            "the source tarball at {source_url} has no CMakeLists.txt under {}",
+            root.display()
+        );
+    }
+    init_slang_submodules(&root);
+    root
+}
+
+/// Populate the `external/` submodule checkouts of an extracted source
+/// tarball. GitHub source archives do not carry submodule contents, so the
+/// tarball alone is not enough to build: reconstruct just enough git
+/// metadata to resolve the pinned gitlinks — `git init`, fetch the release
+/// tag from the upstream repository and load its tree into the index —
+/// then run `git submodule update --init --recursive`. Skipped when the
+/// extracted tree already carries the submodule contents (e.g. a
+/// pre-packed tarball).
+fn init_slang_submodules(slang_src: &Path) {
+    if submodules_present(slang_src) {
+        return;
+    }
+    let tag = format!("v{SLANG_VERSION}");
+    run_git(slang_src, &["init", "-q"]);
+    run_git(slang_src, &["remote", "add", "origin", SLANG_REPO_URL]);
+    run_git(slang_src, &["fetch", "-q", "--depth", "1", "origin", &tag]);
+    // Load the fetched tree into the index (the worktree is left untouched)
+    // so the pinned gitlink SHAs are visible to `git submodule update`.
+    run_git(slang_src, &["reset", "-q", "FETCH_HEAD"]);
+    run_git(
+        slang_src,
+        &[
+            "submodule",
+            "update",
+            "--init",
+            "--recursive",
+            "--depth",
+            "1",
+        ],
+    );
+}
+
+/// Whether every submodule path listed in `.gitmodules` is already a
+/// non-empty directory (i.e. the source already carries the checkouts).
+/// A missing `.gitmodules` means there is nothing to fetch.
+fn submodules_present(slang_src: &Path) -> bool {
+    let Ok(contents) = fs::read_to_string(slang_src.join(".gitmodules")) else {
+        return true;
+    };
+    let mut paths = Vec::new();
+    let mut in_submodule = false;
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_submodule = line.starts_with("[submodule");
+        } else if in_submodule && line.starts_with("path") {
+            if let Some((_, value)) = line.split_once('=') {
+                paths.push(value.trim().to_string());
+            }
+        }
+    }
+    !paths.is_empty()
+        && paths.iter().all(|path| {
+            fs::read_dir(slang_src.join(path))
+                .map(|mut entries| entries.next().is_some())
+                .unwrap_or(false)
+        })
+}
+
+/// Run `git <args>` in `dir`, panicking on failure.
+fn run_git(dir: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .status()
+        .expect("failed to run `git` (required to fetch the slang submodules)");
+    if !status.success() {
+        panic!("`git {}` failed in {}", args.join(" "), dir.display());
+    }
 }
 
 /// Whether the artifact set installed under `artifact_root` is complete
@@ -145,7 +351,7 @@ fn artifacts_complete(artifact_root: &Path, bin_dir: &Path, lib_dir: &Path) -> b
     }
     // The standard-module tree is installed into `lib/`; source builds keep
     // an additional copy in `bin/` for the statically linked slangc.
-    let module_dir_name = format!("slang-standard-module-{}", slang_version());
+    let module_dir_name = format!("slang-standard-module-{SLANG_VERSION}");
     if !lib_dir.join(&module_dir_name).is_dir() && !bin_dir.join(&module_dir_name).is_dir() {
         return false;
     }
@@ -163,98 +369,12 @@ fn artifacts_complete(artifact_root: &Path, bin_dir: &Path, lib_dir: &Path) -> b
     true
 }
 
-/// The slang version this crate builds, taken from the `+<version>` build
-/// metadata of the crate's own version (`1.0.0+2026.21` -> `2026.21`).
-fn slang_version() -> &'static str {
-    let full = env!("CARGO_PKG_VERSION");
-    match full.split_once('+') {
-        Some((_, version)) => version,
-        None => panic!(
-            "shader-slang-src version `{}` must encode the slang version as \
-             `+<version>` build metadata (e.g. `1.0.0+2026.21`)",
-            full
-        ),
-    }
-}
-
 /// Append the platform executable suffix when needed.
 fn exe(name: &str) -> String {
     if cfg!(windows) {
         format!("{name}.exe")
     } else {
         name.to_string()
-    }
-}
-
-/// Return the directory containing the slang source tree to build.
-///
-/// The preferred source is the git submodule vendored at `slang/`. When it is
-/// not present (a crates.io tarball or a cargo git dependency, neither of
-/// which carries submodule contents), the pinned release tag is cloned into
-/// the build output directory instead.
-fn resolve_slang_source(manifest_dir: &Path, out_dir: &Path, tag: &str) -> PathBuf {
-    let submodule = manifest_dir.join("slang");
-    if submodule.join("CMakeLists.txt").is_file() {
-        init_slang_submodules(&submodule);
-        return submodule;
-    }
-
-    let clone_dir = out_dir.join("slang-src");
-    clone_slang(tag, &clone_dir);
-    clone_dir
-}
-
-/// Initialize the submodules slang itself vendors under `external/` (glslang,
-/// spirv-tools, ...). Idempotent and cheap when already initialized.
-fn init_slang_submodules(slang_dir: &Path) {
-    let status = Command::new("git")
-        .args([
-            "submodule",
-            "update",
-            "--init",
-            "--recursive",
-            "--depth",
-            "1",
-        ])
-        .current_dir(slang_dir)
-        .status()
-        .expect("failed to run `git submodule update`");
-    if !status.success() {
-        panic!(
-            "failed to initialize slang submodules in {}",
-            slang_dir.display()
-        );
-    }
-}
-
-/// Clone the slang release tag (shallow, with its own submodules) into `dir`,
-/// reusing a previous clone when present.
-fn clone_slang(tag: &str, dir: &Path) {
-    if dir.join("CMakeLists.txt").is_file() {
-        return;
-    }
-    if dir.exists() {
-        fs::remove_dir_all(dir).expect("failed to remove incomplete slang clone");
-    }
-    let status = Command::new("git")
-        .args([
-            "clone",
-            "--depth",
-            "1",
-            "--branch",
-            tag,
-            "--recurse-submodules",
-            "--shallow-submodules",
-            SLANG_REPO_URL,
-        ])
-        .arg(dir)
-        .status()
-        .expect("failed to run `git clone`");
-    if !status.success() {
-        panic!("failed to clone {SLANG_REPO_URL} at tag {tag}");
-    }
-    if !dir.join("CMakeLists.txt").is_file() {
-        panic!("slang clone at {} is missing CMakeLists.txt", dir.display());
     }
 }
 
@@ -268,10 +388,6 @@ fn build_slang(
     bin_dir: &Path,
     lib_dir: &Path,
 ) {
-    if Command::new("git").arg("--version").output().is_err() {
-        panic!("required tool not found on PATH: git");
-    }
-
     // Configure and build through the `cmake` crate, which drives the system
     // `cmake` binary (failing clearly if it is not installed) and uses
     // `<out_dir>/build` as its build directory, i.e. exactly `build_dir`
@@ -299,14 +415,14 @@ fn build_slang(
         .define("SLANG_ENABLE_SLANG_RHI", "OFF")
         .define("SLANG_ENABLE_GFX", "OFF")
         .define("SLANG_ENABLE_SLANG_GLSLANG", "ON");
-    // Pin the version from this crate's own metadata. Slang otherwise
-    // derives it from git tags, which shallow checkouts (as used by CI)
-    // do not carry; without a tag it falls back to 0.0.0 and the
-    // versioned plugin file names would not match what the crate
-    // promises.
+    // Pin the version from this crate's pinned slang release. Slang
+    // otherwise derives it from git tags, which the fetched tree (and
+    // shallow checkouts) do not carry; without a tag it falls back to
+    // 0.0.0 and the versioned plugin file names would not match what the
+    // crate promises.
     cmake_config
-        .define("SLANG_VERSION_NUMERIC", slang_version())
-        .define("SLANG_VERSION_FULL", slang_version());
+        .define("SLANG_VERSION_NUMERIC", SLANG_VERSION)
+        .define("SLANG_VERSION_FULL", SLANG_VERSION);
     // Build the default target (everything) instead of the crate's default
     // `install` target: the toolchain is installed into `artifact_root`
     // below via `cmake --install`.
@@ -317,7 +433,7 @@ fn build_slang(
     // Install the built toolchain into the artifact root, stripping the
     // installed binaries. This is the same step the shader-slang release
     // pipeline runs before packing its release tarballs, so the source
-    // build and the download provide the same layout.
+    // build and the distribution tarball provide the same layout.
     run_cmake_install(build_dir, artifact_root);
 
     // Normalize the header location to the release layout (`include/`).
@@ -348,6 +464,84 @@ fn build_slang(
     list_artifacts(artifact_root);
 
     // Smoke check: the installed slangc must run.
+    smoke_check_slangc(bin_dir);
+
+    // Mark the artifact set complete only once every step above succeeded.
+    write_layout_marker(artifact_root);
+}
+
+/// Fetch the prebuilt distribution tarball at `dist_url` into `out_dir`,
+/// extract it under `out_dir` and move the extracted tree into the artifact
+/// root, so the extracted directory serves as the location of the
+/// shader-slang binaries exactly as if they had been built from source and
+/// installed.
+fn install_dist(
+    out_dir: &Path,
+    artifact_root: &Path,
+    bin_dir: &Path,
+    lib_dir: &Path,
+    dist_url: &Url,
+) {
+    let tarball = fetch_tarball(dist_url, &out_dir.join("dist"), DIST_URL_ENV_VAR);
+    let extracted = extract_tarball(&tarball, &out_dir.join("dist-extracted"));
+    if artifact_root.exists() {
+        fs::remove_dir_all(artifact_root).unwrap_or_else(|e| {
+            panic!(
+                "failed to remove stale artifact root {}: {e}",
+                artifact_root.display()
+            )
+        });
+    }
+    fs::rename(&extracted, artifact_root).unwrap_or_else(|e| {
+        panic!(
+            "failed to move {} into {}: {e}",
+            extracted.display(),
+            artifact_root.display()
+        )
+    });
+
+    // The distribution tarball's root entries must be exactly the artifact
+    // layout (`bin/`, `lib/`, `include/`, `share/`, ...).
+    for (dir, label) in [
+        (bin_dir, "bin"),
+        (lib_dir, "lib"),
+        (&artifact_root.join("include"), "include"),
+        (&artifact_root.join("share"), "share"),
+    ] {
+        if !dir.is_dir() {
+            panic!("the distribution tarball at {dist_url} has no {label}/ directory");
+        }
+    }
+
+    // Fail loudly here instead of at test time if the tarball lacks a
+    // runtime plugin.
+    let plugin_dir = if cfg!(windows) { bin_dir } else { lib_dir };
+    let exts: &[&str] = if cfg!(windows) {
+        &["dll"]
+    } else {
+        &["so", "dylib"]
+    };
+    for plugin in SLANG_PLUGINS {
+        if !has_plugin_shared(plugin_dir, plugin, exts) {
+            panic!(
+                "the distribution tarball at {dist_url} does not contain the `{plugin}` plugin in {}",
+                plugin_dir.display()
+            );
+        }
+    }
+
+    // Show exactly what this download installed (see `list_artifacts`).
+    list_artifacts(artifact_root);
+
+    // Smoke check: the installed slangc must run.
+    smoke_check_slangc(bin_dir);
+
+    // Mark the artifact set complete only once every step above succeeded.
+    write_layout_marker(artifact_root);
+}
+
+/// Smoke check: the installed `slangc` must run.
+fn smoke_check_slangc(bin_dir: &Path) {
     let status = Command::new(bin_dir.join(exe("slangc")))
         .arg("-version")
         .status()
@@ -355,9 +549,6 @@ fn build_slang(
     if !status.success() {
         panic!("installed slangc failed to run (`slangc -version` exited non-zero)");
     }
-
-    // Mark the artifact set complete only once every step above succeeded.
-    write_layout_marker(artifact_root);
 }
 
 /// Write the layout marker file into `artifact_root` (see `LAYOUT_MARKER`).
@@ -429,13 +620,13 @@ fn collect_headers(artifact_root: &Path) {
 /// Copy the installed loose standard-module tree from `lib/` into `bin/`.
 ///
 /// The release layout keeps the tree under `lib/`, where the runtime finds
-/// it when the compiler is a shared library (the downloaded release). A
+/// it when the compiler is a shared library (a distribution tarball). A
 /// source build links the compiler statically into slangc, and the runtime
 /// then resolves the tree relative to the loaded compiler code -- i.e. the
 /// slangc executable -- so the tree must sit in `bin/` as well for
 /// `import slang.<module>` to work.
 fn copy_standard_modules_to_bin(artifact_root: &Path, bin_dir: &Path, lib_dir: &Path) {
-    let module_dir_name = format!("slang-standard-module-{}", slang_version());
+    let module_dir_name = format!("slang-standard-module-{SLANG_VERSION}");
     let src = lib_dir.join(&module_dir_name);
     let dst = bin_dir.join(&module_dir_name);
     if src.is_dir() && !dst.is_dir() {
@@ -448,121 +639,6 @@ fn copy_standard_modules_to_bin(artifact_root: &Path, bin_dir: &Path, lib_dir: &
             artifact_root.display()
         );
     }
-}
-
-/// Download the prebuilt shader-slang release for the target platform from
-/// the GitHub release corresponding to this crate's `+<version>` metadata
-/// (e.g. `1.0.0+2026.21` -> tag `v2026.21`), and unpack it into
-/// `artifact_root`. The release tarball's root entries are exactly the
-/// artifact layout (`bin/`, `lib/`, `include/`, `share/`, ...), so the
-/// download provides the same layout the source install does.
-fn download_slang(out_dir: &Path, artifact_root: &Path, bin_dir: &Path, lib_dir: &Path) {
-    let (os, arch) = download_target();
-    let file_name = format!("slang-{}-{}-{}.tar.gz", slang_version(), os, arch);
-    let url = format!(
-        "https://github.com/shader-slang/slang/releases/download/v{}/{file_name}",
-        slang_version()
-    );
-
-    let tarball = out_dir.join(&file_name);
-    let response = ureq::get(&url)
-        .header("user-agent", "shader-slang-src")
-        .call()
-        .unwrap_or_else(|e| panic!("failed to download {url}: {e}"));
-    let mut file = fs::File::create(&tarball)
-        .unwrap_or_else(|e| panic!("failed to create {}: {e}", tarball.display()));
-    std::io::copy(&mut response.into_body().into_reader(), &mut file)
-        .unwrap_or_else(|e| panic!("failed to write {}: {e}", tarball.display()));
-
-    // Unpack the release tarball directly into `artifact_root`: its root
-    // entries are exactly the `bin/`, `lib/`, `include/`, `share/` artifact
-    // directories plus the license and documentation files. The `tar` crate
-    // recreates the symlinks (e.g. `libslang-compiler.so` ->
-    // `libslang-compiler.so.0.2026.21`) that a file copy would not.
-    //
-    // `Archive::unpack` is used rather than a per-entry `unpack_in` loop:
-    // it creates the destination directory first (a `unpack_in` call on a
-    // non-existent destination canonicalizes it and fails) and unpacks the
-    // directory entries after the files, so restrictive directory
-    // permissions cannot break the extraction.
-    let file = fs::File::open(&tarball)
-        .unwrap_or_else(|e| panic!("failed to open {}: {e}", tarball.display()));
-    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
-    archive
-        .unpack(artifact_root)
-        .unwrap_or_else(|e| panic!("failed to unpack {file_name}: {e}"));
-    for (dir, label) in [
-        (bin_dir, "bin"),
-        (lib_dir, "lib"),
-        (&artifact_root.join("include"), "include"),
-        (&artifact_root.join("share"), "share"),
-    ] {
-        if !dir.is_dir() {
-            panic!("downloaded {file_name} has no {label}/ directory");
-        }
-    }
-
-    // Fail loudly here instead of at test time if the release lacks a
-    // runtime plugin.
-    let plugin_dir = if os == "windows" { bin_dir } else { lib_dir };
-    let exts: &[&str] = if os == "windows" {
-        &["dll"]
-    } else {
-        &["so", "dylib"]
-    };
-    for plugin in SLANG_PLUGINS {
-        if !has_plugin_shared(plugin_dir, plugin, exts) {
-            panic!(
-                "downloaded {file_name} does not contain the `{plugin}` plugin in {}",
-                plugin_dir.display()
-            );
-        }
-    }
-
-    // Show exactly what this download installed (see `list_artifacts`).
-    list_artifacts(artifact_root);
-
-    // Smoke check: the downloaded slangc must run.
-    let status = Command::new(bin_dir.join(exe("slangc")))
-        .arg("-version")
-        .status()
-        .expect("failed to run downloaded slangc");
-    if !status.success() {
-        panic!("downloaded slangc failed to run (`slangc -version` exited non-zero)");
-    }
-
-    // Mark the artifact set complete only once every step above succeeded.
-    write_layout_marker(artifact_root);
-}
-
-/// The target operating system and CPU architecture this build produces
-/// artifacts for, as shipped in the shader-slang release tarballs. Read from
-/// the `CARGO_CFG_TARGET_*` variables cargo sets for build scripts. Errors
-/// (rather than silently falling back to a source build) for platforms or
-/// architectures the release does not cover.
-fn download_target() -> (&'static str, &'static str) {
-    let os = env::var("CARGO_CFG_TARGET_OS")
-        .unwrap_or_else(|_| panic!("CARGO_CFG_TARGET_OS is not set"));
-    let arch = env::var("CARGO_CFG_TARGET_ARCH")
-        .unwrap_or_else(|_| panic!("CARGO_CFG_TARGET_ARCH is not set"));
-    let os = match os.as_str() {
-        "linux" => "linux",
-        "macos" => "macos",
-        "windows" => "windows",
-        other => panic!(
-            "prebuilt shader-slang binaries are not available for the target \
-             operating system `{other}`; supported: linux, macos, windows"
-        ),
-    };
-    let arch = match arch.as_str() {
-        "x86_64" => "x86_64",
-        "aarch64" => "aarch64",
-        other => panic!(
-            "prebuilt shader-slang binaries are not available for the target \
-             CPU architecture `{other}`; supported: x86_64, aarch64"
-        ),
-    };
-    (os, arch)
 }
 
 /// Whether `dir` contains the shared plugin `needle`: a file whose name

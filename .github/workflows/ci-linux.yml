@@ -13,17 +13,17 @@ jobs:
         include:
           - arch: x86_64
             runs-on: ubuntu-latest
+            dist-url: https://github.com/shader-slang/slang/releases/download/v2026.21/slang-2026.21-linux-x86_64.tar.gz
           - arch: aarch64
             runs-on: ubuntu-26.04-arm
+            dist-url: https://github.com/shader-slang/slang/releases/download/v2026.21/slang-2026.21-linux-aarch64.tar.gz
     runs-on: ${{ matrix.runs-on }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Build and run tests
         run: cargo test --workspace
-      - name: Build and run tests (downloaded binaries)
-        run: SHADER_SLANG_SRC_DOWNLOAD_BINARIES=true cargo test --workspace
+      - name: Build and run tests (prebuilt binaries)
+        run: SHADER_SLANG_DIST_URL=${{ matrix.dist-url }} cargo test --workspace

@@ -1,6 +1,6 @@
 //! Build artifacts produced by this crate's `build.rs`: the shader-slang
-//! compiler toolchain, either installed from a source build or downloaded as
-//! the prebuilt release binaries (see [`SOURCE`]).
+//! compiler toolchain, either installed from a source build or unpacked from
+//! a prebuilt distribution tarball (see [`SOURCE`]).
 //!
 //! The paths returned here point into this crate's `OUT_DIR`, where
 //! `build.rs` installed the toolchain in the same layout as the shader-slang
@@ -13,16 +13,36 @@
 
 use std::path::PathBuf;
 
-/// The shader-slang release this crate builds (the `+<version>` build metadata
-/// of this crate's version, e.g. `2026.21`). Emitted by `build.rs`.
-pub const SLANG_VERSION: &str = env!("SHADER_SLANG_VERSION");
+/// The shader-slang release this crate builds (`2026.21`, tag `v2026.21`).
+pub const SLANG_VERSION: &str = "2026.21";
+
+/// Default value of the `SHADER_SLANG_SOURCE_URL` environment variable, used
+/// when the variable is unset or empty: the GitHub source archive of the
+/// `v2026.21` tag.
+pub const DEFAULT_SHADER_SLANG_SOURCE_URL: &str =
+    "https://github.com/shader-slang/slang/archive/refs/tags/v2026.21.tar.gz";
+
+/// The URL of the shader-slang source tarball `build.rs` used (a valid
+/// `https` or `file` URL): the value of the `SHADER_SLANG_SOURCE_URL`
+/// environment variable, or [`DEFAULT_SHADER_SLANG_SOURCE_URL`] when it was
+/// unset or empty. Emitted by `build.rs`.
+pub const SHADER_SLANG_SOURCE_URL: &str = env!("SHADER_SLANG_SOURCE_URL");
+
+/// The URL of the prebuilt distribution tarball `build.rs` used, or the
+/// empty string when the `SHADER_SLANG_DIST_URL` environment variable was
+/// unset or empty (a valid `https` or `file` URL otherwise). Emitted by
+/// `build.rs`.
+pub const SHADER_SLANG_DIST_URL: &str = env!("SHADER_SLANG_DIST_URL");
 
 /// How the artifacts were obtained: `"source"` when `build.rs` compiled and
-/// installed shader-slang from source, or `"download"` when `build.rs`
-/// downloaded the prebuilt release binaries (enabled by setting
-/// `SHADER_SLANG_SRC_DOWNLOAD_BINARIES` to `"true"` while building).
-/// Emitted by `build.rs`.
-pub const SOURCE: &str = env!("SHADER_SLANG_SOURCE");
+/// installed shader-slang from the source tarball at
+/// [`SHADER_SLANG_SOURCE_URL`], or `"download"` when a prebuilt distribution
+/// tarball was provided through `SHADER_SLANG_DIST_URL`.
+pub const SOURCE: &str = if SHADER_SLANG_DIST_URL.is_empty() {
+    "source"
+} else {
+    "download"
+};
 
 /// Directory containing all installed artifacts: the `bin/`, `lib/`,
 /// `include/` and `share/` directories plus the license and documentation
@@ -173,9 +193,10 @@ mod tests {
         })
     }
 
-    /// The shared `slang-compiler` library under [`lib_dir`] that the release
-    /// tarballs ship instead of the static libraries: `libslang-compiler.so`
-    /// / `.dylib`, or the `slang-compiler.lib` import library on Windows.
+    /// The shared `slang-compiler` library under [`lib_dir`] that the
+    /// distribution tarballs ship instead of the static libraries:
+    /// `libslang-compiler.so` / `.dylib`, or the `slang-compiler.lib` import
+    /// library on Windows.
     fn downloaded_compiler_lib() -> PathBuf {
         let dir = lib_dir();
         let exts: &[&str] = &["so", "dylib", "lib"];
@@ -272,8 +293,8 @@ mod tests {
                 assert_readable_file(&static_lib_path(name));
             }
         } else {
-            // The release tarballs ship shared libraries instead of static
-            // ones.
+            // The distribution tarballs ship shared libraries instead of
+            // static ones.
             assert_readable_file(&downloaded_compiler_lib());
         }
         // The shared backend plugins the binaries dlopen at runtime.
@@ -302,22 +323,53 @@ mod tests {
 
     #[test]
     fn build_provenance_matches_request() {
-        // When SHADER_SLANG_SRC_DOWNLOAD_BINARIES changes, `cargo` re-runs
-        // the build script and recompiles the crate (the script re-emits
-        // the provenance as `SHADER_SLANG_SOURCE`), so the compile-time
-        // `SOURCE` constant must always match the variable as seen by this
-        // test process. A mismatch means the build did not follow the
-        // request.
-        let requested = std::env::var("SHADER_SLANG_SRC_DOWNLOAD_BINARIES");
-        let expected = if requested.as_deref().is_ok_and(|v| v == "true") {
-            "download"
-        } else {
+        // When SHADER_SLANG_DIST_URL changes, `cargo` re-runs the build
+        // script and recompiles the crate (the script re-emits the URL as
+        // `SHADER_SLANG_DIST_URL`), so the compile-time `SOURCE` constant
+        // must always match the variable as seen by this test process. A
+        // mismatch means the build did not follow the request.
+        let requested = std::env::var("SHADER_SLANG_DIST_URL").unwrap_or_default();
+        let expected = if requested.is_empty() {
             "source"
+        } else {
+            "download"
         };
         assert_eq!(
             SOURCE,
             expected,
-            "artifacts came from `{SOURCE}`, but SHADER_SLANG_SRC_DOWNLOAD_BINARIES={requested:?} requested `{expected}`"
+            "artifacts came from `{SOURCE}`, but SHADER_SLANG_DIST_URL={requested:?} requested `{expected}`"
         );
+    }
+
+    #[test]
+    fn source_url_constant_matches_request() {
+        // Unset or empty SHADER_SLANG_SOURCE_URL must compile to the
+        // default tarball URL; a set value must be an https or file URL.
+        let requested = std::env::var("SHADER_SLANG_SOURCE_URL").unwrap_or_default();
+        if requested.is_empty() {
+            assert_eq!(SHADER_SLANG_SOURCE_URL, DEFAULT_SHADER_SLANG_SOURCE_URL);
+        } else {
+            assert!(
+                SHADER_SLANG_SOURCE_URL.starts_with("https://")
+                    || SHADER_SLANG_SOURCE_URL.starts_with("file://"),
+                "SHADER_SLANG_SOURCE_URL={SHADER_SLANG_SOURCE_URL:?} is not an https or file URL"
+            );
+        }
+    }
+
+    #[test]
+    fn dist_url_constant_matches_request() {
+        // Unset or empty SHADER_SLANG_DIST_URL must compile to the empty
+        // string; a set value must be an https or file URL.
+        let requested = std::env::var("SHADER_SLANG_DIST_URL").unwrap_or_default();
+        if requested.is_empty() {
+            assert_eq!(SHADER_SLANG_DIST_URL, "");
+        } else {
+            assert!(
+                SHADER_SLANG_DIST_URL.starts_with("https://")
+                    || SHADER_SLANG_DIST_URL.starts_with("file://"),
+                "SHADER_SLANG_DIST_URL={SHADER_SLANG_DIST_URL:?} is not an https or file URL"
+            );
+        }
     }
 }

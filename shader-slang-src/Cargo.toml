@@ -1,6 +1,6 @@
 [package]
 name = "shader-slang-src"
-version = "1.0.0+2026.21"
+version = "1.0.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -10,18 +10,22 @@ description = "Build the shader-slang compiler toolchain (slangc and friends) fr
 build = "build.rs"
 readme = "README.md"
 
-# This crate vendors the shader-slang source as a git submodule at `slang/`.
-# When the submodule is unavailable (a crates.io tarball or a cargo git
-# dependency), build.rs clones the pinned release tag instead. CMake is
-# driven through the `cmake` crate; `git` is still invoked directly. When
-# SHADER_SLANG_SRC_DOWNLOAD_BINARIES is set to "true", build.rs downloads
-# the prebuilt release binaries with `ureq` and extracts them with `tar`
-# and `flate2` instead of building them.
+# This crate does not vendor the shader-slang source (a git submodule would
+# make the crate too large to publish). Instead, build.rs fetches the
+# shader-slang source tarball from the SHADER_SLANG_SOURCE_URL environment
+# variable (a valid https or file URL in the WHATWG URL standard; unset or
+# empty defaults to the GitHub source archive of the v2026.21 tag),
+# downloads or copies it into $OUT_DIR and extracts it there, then builds it
+# with CMake through the `cmake` crate. When SHADER_SLANG_DIST_URL is set to
+# a non-empty https or file URL, build.rs instead fetches that prebuilt
+# distribution tarball with `ureq` and extracts it with `tar` and `flate2`,
+# using the extracted directory as the installed toolchain.
 
 [build-dependencies]
 cmake = "0.1"
 flate2 = "1"
 tar = "0.4"
 ureq = "3"
+url = "2"
 
 [dependencies]
