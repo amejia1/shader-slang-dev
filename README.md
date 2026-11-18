@@ -94,15 +94,20 @@ When enabled, the optional build dependencies (`cmake`, `flate2`, `tar`,
   or copied (`file`) into `$OUT_DIR` and extracted there. The tarball is
   expected to already contain the `external/` submodule checkouts (plain
   GitHub source archives do not, and are rejected); e.g. pack a fully
-  checked-out tree with `git archive`.
+  checked-out tree (without `.git` dirs) with `tar`, as the CI does.
 
 From the source tree, `build.rs` configures and builds shader-slang through
 the `cmake` crate (which drives the system `cmake` binary) using the same
 flags as candle's `build-install-slang.sh` (`-DSLANG_LIB_TYPE=STATIC`,
-tests/examples/rhi/gfx disabled), then installs the toolchain into the
-artifact root (`<out_dir>/slang-artifact/`) with
-`cmake --install <build_dir> --prefix <artifact_root> --strip`. The install
-tree has the same layout as the shader-slang release tarballs:
+tests/examples/rhi/gfx disabled, `-DSLANG_ENABLE_SLANG_GLSLANG=ON` so the
+runtime-dlopened glslang plugin is built), then installs the toolchain into
+the artifact root (`<out_dir>/slang-artifact/`) with
+`cmake --install <build_dir> --prefix <artifact_root> --strip`. Two more
+flags keep the build lean: `SLANG_SLANG_LLVM_FLAVOR=DISABLE` (the source build
+does not ship the `slang-llvm` plugin; the release tarballs do) and, on
+macOS only, `SLANG_ENABLE_DXIL=OFF` (no prebuilt DXC exists for Darwin, and
+building DXC from source there is slow and hits parallel-build races). The
+install tree has the same layout as the shader-slang release tarballs:
 
 - `bin/` — the binaries (`slangc`, `slangd`, `slang`, `slangi`), plus a
   copy of the standard-module tree: the statically linked `slangc`

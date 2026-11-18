@@ -442,7 +442,22 @@ fn build_slang(
         .define("SLANG_ENABLE_EXAMPLES", "OFF")
         .define("SLANG_ENABLE_SLANG_RHI", "OFF")
         .define("SLANG_ENABLE_GFX", "OFF")
-        .define("SLANG_ENABLE_SLANG_GLSLANG", "ON");
+        .define("SLANG_ENABLE_SLANG_GLSLANG", "ON")
+        // DXC/DXIL support pulls in FetchDXC; on macOS there is no prebuilt
+        // DXC binary, so slang builds DXC from source there — an old LLVM
+        // snapshot whose parallel build races on macOS (corrupt archives,
+        // then undefined symbols when linking libdxcompiler.dylib) and takes
+        // 10-30 extra minutes. The toolchain this crate provides does not
+        // need DXIL (the tests exercise the glslang plugins), so skip it on
+        // macOS. Linux/Windows use the prebuilt DXC binaries and keep DXIL.
+        .define(
+            "SLANG_ENABLE_DXIL",
+            if cfg!(target_os = "macos") {
+                "OFF"
+            } else {
+                "ON"
+            },
+        );
     // Pin the version from this crate's pinned slang release. Slang
     // otherwise derives it from git tags, which shallow checkouts do not
     // carry; without a tag it falls back to 0.0.0 and the versioned plugin
