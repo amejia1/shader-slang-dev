@@ -1,77 +1,178 @@
-//! Build the [shader-slang](https://github.com/shader-slang/slang) compiler
-//! toolchain (`slangc` and friends) from source and locate the built
-//! artifacts from another crate's `build.rs`.
+//! Locate a shader-slang installation (the `slangc` compiler toolchain and
+//! friends) and, with the `build` feature, build and install it.
 //!
-//! This crate's `build.rs` installs the toolchain into this crate's
-//! `OUT_DIR` in the same layout as the shader-slang release tarballs:
-//! `bin/` (binaries), `lib/` (static or shared libraries and the
-//! standard-module tree), `include/` (headers) and `share/` (documentation
-//! and data). The paths returned here are stable for the lifetime of a
-//! single build graph.
+//! # Locating an installation (default)
+//!
+//! The accessors below resolve the artifact root at runtime, in this order:
+//!
+//! 1. `$SHADER_SLANG_HOME` — an install prefix containing `bin/slangc`,
+//!    whether it was built and installed from source or installed from a
+//!    downloaded release tarball ([`SHADER_SLANG_HOME_ENV_VAR`]).
+//! 2. Common per-OS install locations ([`common_locations`]), including
+//!    architecture-specific directories matching the release-tarball naming
+//!    (`slang-<os>-<arch>`).
+//! 3. `$OUT_DIR/slang-artifact` — only when the `build` feature is enabled
+//!    and the build script produced artifacts there.
+//!
+//! [`locate`] returns `None` when nothing is found, [`source`] reports how
+//! the artifacts in use were obtained, and [`artifact_root`] panics with the
+//! searched locations when nothing is found.
+//!
+//! # Building from source or tarballs (`build` feature)
+//!
+//! With `--features build`, `build.rs` clones and builds shader-slang from
+//! source (or fetches the `SHADER_SLANG_SOURCE_URL` / `SHADER_SLANG_DIST_URL`
+//! tarballs) into `$OUT_DIR/slang-artifact` — unless an installation is
+//! already available through (1) or (2) above, in which case the build is
+//! skipped. [`install_artifacts`] then copies the located artifact tree
+//! (symlinks preserved) to a given install prefix, and the
+//! `shader-slang-dev-installer` binary wraps it:
+//!
+//! ```sh
+//! cargo run --features build --bin shader-slang-dev-installer -- /opt/slang
+//! ```
 //!
 //! Typical use is from another crate's `build.rs`:
 //!
 //! ```no_run
-//! use std::process::Command;
-//!
-//! fn main() {
-//!     let slangc = shader_slang_dev::slangc();
-//!     // Compile shaders with the built slangc.
-//!     let status = Command::new(&slangc)
-//!         .arg("shader.slang")
-//!         .arg("-target")
-//!         .arg("spirv")
-//!         .status()
-//!         .unwrap();
-//!     assert!(status.success());
-//!
-//!     // Link against the built libraries, or compile against the headers:
-//!     let _lib_dir = shader_slang_dev::lib_dir();      // `-L <dir>` or `cargo::rustc-link-search=[KIND=]<dir>` in cargo build script.
-//!     let _include_dir = shader_slang_dev::include_dir(); // `-I <dir>`
-//! }
+//! let slangc = shader_slang_dev::slangc();
+//! // Compile shaders with the located slangc:
+//! //   std::process::Command::new(&slangc).arg("shader.slang").status().unwrap();
+//! // Link against the located libraries, or compile against the headers:
+//! let _lib_dir = shader_slang_dev::lib_dir();      // `-L <dir>` or `cargo::rustc-link-search=[KIND=]<dir>` in cargo build script.
+//! let _include_dir = shader_slang_dev::include_dir(); // `-I <dir>`
 //! ```
 
-use std::path::PathBuf;
+mod detect;
+#[cfg(feature = "build")]
+mod install;
+#[cfg(feature = "build")]
+pub use install::install_artifacts;
 
-/// The shader-slang release this crate builds (`2026.21`, tag `v2026.21`).
+pub use detect::Location;
+
+use std::path::{Path, PathBuf};
+
+/// The shader-slang release this crate pins (`2026.21`, tag `v2026.21`).
 pub const SLANG_VERSION: &str = "2026.21";
 
-/// The URL of the shader-slang source tarball `build.rs` used (a valid
+/// Name of the environment variable that points at a shader-slang install
+/// prefix (a directory containing `bin/slangc`), whether it was built and
+/// installed from source or installed from a downloaded tarball.
+pub const SHADER_SLANG_HOME_ENV_VAR: &str = detect::HOME_ENV_VAR;
+
+/// The URL of the shader-slang source tarball the build used (a valid
 /// `https` or `file` URL), or the empty string when the
 /// `SHADER_SLANG_SOURCE_URL` environment variable was unset or empty — in
-/// that case `build.rs` cloned the `v2026.21` tag of the upstream repository
-/// with all its submodules instead. Emitted by `build.rs`.
-pub const SHADER_SLANG_SOURCE_URL: &str = env!("SHADER_SLANG_SOURCE_URL");
-
-/// The URL of the prebuilt distribution tarball `build.rs` used, or the
-/// empty string when the `SHADER_SLANG_DIST_URL` environment variable was
-/// unset or empty (a valid `https` or `file` URL otherwise). Emitted by
-/// `build.rs`.
-pub const SHADER_SLANG_DIST_URL: &str = env!("SHADER_SLANG_DIST_URL");
-
-/// How the artifacts were obtained: `"source"` when `build.rs` compiled and
-/// installed shader-slang from source (a `SHADER_SLANG_SOURCE_URL` tarball or
-/// a git clone of the upstream repository), or `"download"` when a prebuilt
-/// distribution tarball was provided through `SHADER_SLANG_DIST_URL`.
-pub const SOURCE: &str = if SHADER_SLANG_DIST_URL.is_empty() {
-    "source"
-} else {
-    "download"
+/// that case a build with the `build` feature cloned the `v2026.21` tag of
+/// the upstream repository with all its submodules instead. With the `build`
+/// feature disabled no build happened and this is simply the variable's
+/// value as seen when the crate was compiled. Emitted by `build.rs`.
+pub const SHADER_SLANG_SOURCE_URL: &str = match option_env!("SHADER_SLANG_SOURCE_URL") {
+    Some(value) => value,
+    None => "",
 };
+
+/// The URL of the prebuilt distribution tarball the build used, or the empty
+/// string when the `SHADER_SLANG_DIST_URL` environment variable was unset or
+/// empty (a valid `https` or `file` URL otherwise). With the `build` feature
+/// disabled no build happened and this is simply the variable's value as
+/// seen when the crate was compiled. Emitted by `build.rs`.
+pub const SHADER_SLANG_DIST_URL: &str = match option_env!("SHADER_SLANG_DIST_URL") {
+    Some(value) => value,
+    None => "",
+};
+
+/// Locate the shader-slang artifacts: `$SHADER_SLANG_HOME`, then the
+/// [`common_locations`], then `$OUT_DIR/slang-artifact` (the last only when
+/// the `build` feature is enabled). Returns `None` when nothing is found.
+pub fn locate() -> Option<Location> {
+    detect::find(
+        detect::home_env().as_deref(),
+        out_dir_artifacts().as_deref(),
+    )
+}
+
+/// The `SHADER_SLANG_HOME` install prefix, when set to a non-empty value.
+pub fn shader_slang_home() -> Option<PathBuf> {
+    detect::home_env()
+}
+
+/// Common install locations searched after `$SHADER_SLANG_HOME` (and before
+/// `$OUT_DIR`), per operating system and CPU architecture.
+pub fn common_locations() -> Vec<PathBuf> {
+    detect::common_locations()
+}
+
+/// Whether `path` looks like a shader-slang install prefix (it contains
+/// `bin/slangc`, with the platform `.exe` suffix on Windows).
+pub fn is_install_root(path: &Path) -> bool {
+    detect::is_install_root(path)
+}
+
+/// How the artifacts in use were obtained: `"home"` (`SHADER_SLANG_HOME`),
+/// `"system"` (a common install location), `"source"` or `"download"` (the
+/// `$OUT_DIR` artifacts built from source or fetched from the
+/// `SHADER_SLANG_DIST_URL` tarball — reachable only with the `build`
+/// feature), or `"none"` when no installation was found.
+pub fn source() -> &'static str {
+    match locate() {
+        Some(Location::Home(_)) => "home",
+        Some(Location::System(_)) => "system",
+        Some(Location::OutDir(_)) => {
+            if SHADER_SLANG_DIST_URL.is_empty() {
+                "source"
+            } else {
+                "download"
+            }
+        }
+        None => "none",
+    }
+}
 
 /// Directory containing all installed artifacts: the `bin/`, `lib/`,
 /// `include/` and `share/` directories plus the license and documentation
 /// files.
+///
+/// Panics when no shader-slang installation is found; the panic message lists
+/// the searched locations.
 pub fn artifact_root() -> PathBuf {
-    PathBuf::from(env!("SHADER_SLANG_ARTIFACT_ROOT"))
+    locate().map(Location::into_path).unwrap_or_else(|| {
+        let mut searched = vec![format!("${SHADER_SLANG_HOME_ENV_VAR}")];
+        searched.extend(
+            detect::common_locations()
+                .iter()
+                .map(|p| p.display().to_string()),
+        );
+        if cfg!(feature = "build") {
+            searched.push(format!("$OUT_DIR/{}", detect::ARTIFACT_ROOT_DIR));
+        }
+        panic!(
+            "no shader-slang installation found (searched: {})\n\
+             set ${SHADER_SLANG_HOME_ENV_VAR} to an install prefix containing bin/slangc, \
+             install shader-slang into a common location, or enable the `build` feature to \
+             build it into $OUT_DIR",
+            searched.join(", ")
+        )
+    })
 }
 
-/// Directory containing the built binaries (`slangc`, `slangd`, ...).
+/// `$OUT_DIR/slang-artifact`, but only when the `build` feature is enabled
+/// (the build script only produces artifacts there with the feature on).
+fn out_dir_artifacts() -> Option<PathBuf> {
+    if cfg!(feature = "build") {
+        option_env!("OUT_DIR").map(|dir| PathBuf::from(dir).join(detect::ARTIFACT_ROOT_DIR))
+    } else {
+        None
+    }
+}
+
+/// Directory containing the binaries (`slangc`, `slangd`, ...).
 pub fn bin_dir() -> PathBuf {
     artifact_root().join("bin")
 }
 
-/// Directory containing the built static and shared libraries; suitable for a
+/// Directory containing the static and shared libraries; suitable for a
 /// `-L` linker flag or using as `cargo::rustc-link-search=[KIND=]<dir>` in cargo build script.
 pub fn lib_dir() -> PathBuf {
     artifact_root().join("lib")
@@ -97,15 +198,7 @@ pub fn slangc() -> PathBuf {
 /// Path to a named binary under [`bin_dir`] (the platform `.exe` suffix is
 /// added automatically on Windows).
 pub fn binary(name: &str) -> PathBuf {
-    bin_dir().join(exe_name(name))
-}
-
-fn exe_name(name: &str) -> String {
-    if cfg!(windows) {
-        format!("{name}.exe")
-    } else {
-        name.to_string()
-    }
+    bin_dir().join(detect::exe_name(name))
 }
 
 #[cfg(test)]
@@ -126,10 +219,7 @@ mod tests {
     /// relative to its own executable).
     fn standard_module_dirs() -> Vec<PathBuf> {
         let name = standard_module_dir_name();
-        let mut dirs = vec![lib_dir().join(&name)];
-        if SOURCE == "source" || cfg!(windows) {
-            dirs.push(bin_dir().join(&name));
-        }
+        let mut dirs = vec![lib_dir().join(&name), bin_dir().join(&name)];
         dirs.retain(|dir| dir.is_dir());
         dirs
     }
@@ -173,8 +263,8 @@ mod tests {
 
     /// Recursively list every file under the artifact directories (`bin/`,
     /// `lib/`, `include/`), one per line. Makes a missing-file failure
-    /// self-describing: the panic message shows exactly what the build
-    /// actually installed.
+    /// self-describing: the panic message shows exactly what the located
+    /// install contains.
     fn list_artifact_files() -> String {
         let mut all = Vec::new();
         for dir in [bin_dir(), lib_dir(), include_dir()] {
@@ -259,6 +349,16 @@ mod tests {
     }
 
     #[test]
+    fn artifact_root_is_a_valid_install() {
+        let root = artifact_root();
+        assert!(
+            is_install_root(&root),
+            "located artifact root {} has no bin/slangc",
+            root.display()
+        );
+    }
+
+    #[test]
     fn directories_exist_and_are_readable() {
         assert_readable_dir(&artifact_root());
         assert_readable_dir(&bin_dir());
@@ -301,15 +401,16 @@ mod tests {
 
     #[test]
     fn libraries_exist_and_are_readable() {
-        if SOURCE == "source" {
-            // The install produces the compiler and runtime as static
-            // libraries.
-            for name in ["slang-compiler", "slang-rt"] {
-                assert_readable_file(&static_lib_path(name));
+        // Source builds install the compiler and runtime as static
+        // libraries; distribution tarballs (and installs made from them)
+        // ship the shared compiler library instead. Probe which one the
+        // located install provides.
+        let static_libs = ["slang-compiler", "slang-rt"].map(static_lib_path);
+        if static_libs.iter().all(|path| path.is_file()) {
+            for path in &static_libs {
+                assert_readable_file(path);
             }
         } else {
-            // The distribution tarballs ship shared libraries instead of
-            // static ones.
             assert_readable_file(&downloaded_compiler_lib());
         }
         // The shared backend plugins the binaries dlopen at runtime.
@@ -337,23 +438,23 @@ mod tests {
     }
 
     #[test]
-    fn build_provenance_matches_request() {
-        // When SHADER_SLANG_DIST_URL changes, `cargo` re-runs the build
-        // script and recompiles the crate (the script re-emits the URL as
-        // `SHADER_SLANG_DIST_URL`), so the compile-time `SOURCE` constant
-        // must always match the variable as seen by this test process. A
-        // mismatch means the build did not follow the request.
-        let requested = std::env::var("SHADER_SLANG_DIST_URL").unwrap_or_default();
-        let expected = if requested.is_empty() {
-            "source"
-        } else {
-            "download"
-        };
-        assert_eq!(
-            SOURCE,
-            expected,
-            "artifacts came from `{SOURCE}`, but SHADER_SLANG_DIST_URL={requested:?} requested `{expected}`"
-        );
+    fn source_matches_located_artifacts() {
+        let source = source();
+        match locate().expect("tests require a located shader-slang installation") {
+            Location::Home(_) => assert_eq!(source, "home"),
+            Location::System(_) => assert_eq!(source, "system"),
+            Location::OutDir(_) => {
+                let expected = if SHADER_SLANG_DIST_URL.is_empty() {
+                    "source"
+                } else {
+                    "download"
+                };
+                assert_eq!(
+                    source, expected,
+                    "artifacts are in $OUT_DIR, but SHADER_SLANG_DIST_URL={SHADER_SLANG_DIST_URL:?} implies `{expected}`"
+                );
+            }
+        }
     }
 
     #[test]

@@ -23,9 +23,37 @@ jobs:
         uses: actions/checkout@v4
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-      - name: Build and run tests
-        run: cargo test --workspace
-      - name: Build and run tests (prebuilt binaries)
+      - name: Download the shader-slang release tarball
+        run: curl.exe -fL --retry 3 -o slang.tar.gz "${{ matrix.dist-url }}"
+      - name: Extract the release tarball
         run: |
-          $env:SHADER_SLANG_DIST_URL = "${{ matrix.dist-url }}"
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\slang-home" | Out-Null
+          tar -xzf slang.tar.gz -C "$env:RUNNER_TEMP\slang-home" --strip-components=1
+      - name: Format check
+        run: cargo fmt --all -- --check
+      - name: Clippy (default features — detection only)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test with SHADER_SLANG_HOME
+        env:
+          SHADER_SLANG_HOME: ${{ env.RUNNER_TEMP }}\slang-home
+        run: cargo test --workspace
+      - name: Test the build feature (distribution tarball into $OUT_DIR)
+        env:
+          SHADER_SLANG_DIST_URL: ${{ matrix.dist-url }}
+        run: cargo test --workspace --features build
+      - name: Clippy with the build feature
+        env:
+          SHADER_SLANG_HOME: ${{ env.RUNNER_TEMP }}\slang-home
+        run: cargo clippy --workspace --all-targets --features build -- -D warnings
+      - name: Test the shader-slang-dev-installer binary
+        env:
+          SHADER_SLANG_HOME: ${{ env.RUNNER_TEMP }}\slang-home
+        run: |
+          cargo run --features build --bin shader-slang-dev-installer -- "$env:RUNNER_TEMP\slang-installed"
+          $env:SHADER_SLANG_HOME = "$env:RUNNER_TEMP\slang-installed"
+          cargo test --workspace
+      - name: Test detection of a common install location
+        run: |
+          New-Item -ItemType Directory -Force -Path "C:\slang-windows-${{ matrix.arch }}" | Out-Null
+          tar -xzf slang.tar.gz -C "C:\slang-windows-${{ matrix.arch }}" --strip-components=1
           cargo test --workspace

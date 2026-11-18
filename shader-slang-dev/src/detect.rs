@@ -1,0 +1,327 @@
+//! Detection of an existing shader-slang installation.
+//!
+//! This module is compiled into both the library (`mod detect;`) and the
+//! build script (`#[path = "src/detect.rs"] mod detect;` in `build.rs`), so
+//! the lookup rules live in exactly one place. It is `std`-only.
+//!
+//! Lookup order (see [`find`]):
+//!
+//! 1. `$SHADER_SLANG_HOME` — an install prefix containing `bin/slangc`,
+//!    whether it was built and installed from source or extracted from a
+//!    downloaded release tarball. Authoritative: when set and non-empty it
+//!    is used as-is.
+//! 2. Common per-OS install locations (see [`common_locations`]), including
+//!    architecture-specific directories matching the release-tarball naming
+//!    (`slang-<os>-<arch>`).
+//! 3. `$OUT_DIR/slang-artifact` — the artifacts this crate's build script
+//!    produced; only passed in by the library when the `build` feature is
+//!    enabled.
+
+use std::env;
+use std::path::{Path, PathBuf};
+
+/// Environment variable pointing at a shader-slang install prefix (a
+/// directory containing `bin/slangc`, `lib/`, ...). Whether the install was
+/// built from source or extracted from a downloaded tarball does not matter.
+pub const HOME_ENV_VAR: &str = "SHADER_SLANG_HOME";
+
+/// Directory name under `$OUT_DIR` holding the installed toolchain (the
+/// artifact root). Its layout matches the shader-slang release tarballs:
+/// `bin/`, `lib/`, `include/`, `share/` plus the license and documentation
+/// files.
+#[cfg_attr(not(feature = "build"), allow(dead_code))]
+pub const ARTIFACT_ROOT_DIR: &str = "slang-artifact";
+
+/// Where a located artifact root came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Location {
+    /// From the `SHADER_SLANG_HOME` environment variable.
+    Home(PathBuf),
+    /// From one of the [`common_locations`].
+    System(PathBuf),
+    /// From `$OUT_DIR/slang-artifact` (only reachable with the `build`
+    /// feature enabled).
+    OutDir(PathBuf),
+}
+
+// The build script uses only some of these methods depending on the `build`
+// feature; silence dead-code for the rest.
+#[allow(dead_code)]
+impl Location {
+    /// The artifact root path.
+    pub fn path(&self) -> &Path {
+        match self {
+            Location::Home(p) | Location::System(p) | Location::OutDir(p) => p,
+        }
+    }
+
+    /// Human-readable name of where the artifacts came from.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Location::Home(_) => "SHADER_SLANG_HOME",
+            Location::System(_) => "a common install location",
+            Location::OutDir(_) => "$OUT_DIR",
+        }
+    }
+
+    /// Consume into the artifact root path.
+    pub fn into_path(self) -> PathBuf {
+        match self {
+            Location::Home(p) | Location::System(p) | Location::OutDir(p) => p,
+        }
+    }
+}
+
+/// Append the platform executable suffix when needed.
+pub fn exe_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    }
+}
+
+/// Whether `root` looks like a shader-slang install prefix: it contains
+/// `bin/slangc` (with the platform `.exe` suffix on Windows).
+pub fn is_install_root(root: &Path) -> bool {
+    root.join("bin").join(exe_name("slangc")).is_file()
+}
+
+/// The `SHADER_SLANG_HOME` value as a path, or `None` when unset or empty.
+pub fn home_env() -> Option<PathBuf> {
+    env::var_os(HOME_ENV_VAR)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+/// The user's home directory (`$HOME`, falling back to `$USERPROFILE`).
+fn home_dir() -> Option<PathBuf> {
+    env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+/// Short OS name used in the release-tarball directory naming
+/// (`slang-<version>-<os>-<arch>`): `linux`, `macos` or `windows`.
+pub fn os_name() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "linux"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else {
+        "unknown"
+    }
+}
+
+/// Short CPU architecture name used in the release-tarball directory naming
+/// (`slang-<version>-<os>-<arch>`).
+pub fn arch() -> &'static str {
+    if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else if cfg!(target_arch = "x86") {
+        "x86"
+    } else if cfg!(target_arch = "arm") {
+        "arm"
+    } else if cfg!(target_arch = "riscv64") {
+        "riscv64"
+    } else {
+        "unknown"
+    }
+}
+
+/// Common locations a shader-slang installation is found in, per operating
+/// system, including architecture-specific directories matching the
+/// release-tarball naming (`slang-<os>-<arch>` — e.g. where
+/// `slang-2026.21-linux-x86_64.tar.gz` gets extracted in place under `/opt`).
+///
+/// A location only counts when [`is_install_root`] holds for it (it contains
+/// `bin/slangc`), so unrelated prefixes (`/usr`, `/usr/local` on a machine
+/// without slang, ...) are skipped.
+pub fn common_locations() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let os = os_name();
+    let arch = arch();
+    if cfg!(target_os = "linux") {
+        dirs.extend(["/usr/local", "/usr", "/opt/slang", "/opt/shader-slang"].map(PathBuf::from));
+    } else if cfg!(target_os = "macos") {
+        // Homebrew prefixes: /opt/homebrew on Apple Silicon, /usr/local on
+        // Intel (both listed); `brew install slang` puts slangc in bin/.
+        dirs.extend(
+            [
+                "/usr/local",
+                "/opt/homebrew",
+                "/opt/slang",
+                "/opt/shader-slang",
+            ]
+            .map(PathBuf::from),
+        );
+    } else if cfg!(target_os = "windows") {
+        for var in ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
+            if let Some(value) = env::var_os(var) {
+                let base = PathBuf::from(value);
+                dirs.push(base.join("slang"));
+                dirs.push(base.join("shader-slang"));
+            }
+        }
+        if let Some(value) = env::var_os("LOCALAPPDATA") {
+            let base = PathBuf::from(value);
+            dirs.push(base.join("slang"));
+            dirs.push(base.join("Programs").join("slang"));
+        }
+        dirs.push(PathBuf::from(r"C:\slang"));
+    }
+    // Architecture-specific extraction locations of the release tarballs.
+    if cfg!(target_os = "windows") {
+        dirs.push(PathBuf::from(format!(r"C:\slang-{arch}")));
+        dirs.push(PathBuf::from(format!(r"C:\slang-windows-{arch}")));
+    } else {
+        for base in ["/opt", "/usr/local"] {
+            dirs.push(PathBuf::from(base).join(format!("slang-{os}-{arch}")));
+            dirs.push(PathBuf::from(base).join(format!("slang-{arch}")));
+        }
+    }
+    if let Some(home) = home_dir() {
+        dirs.push(home.join(".local"));
+        dirs.push(home.join("slang"));
+        dirs.push(home.join(format!("slang-{os}-{arch}")));
+    }
+    dirs
+}
+
+/// The lookup itself, with the candidate lists passed in so tests can
+/// substitute their own: `SHADER_SLANG_HOME` first (authoritative, used
+/// as-is), then `common`, then `out_dir` (each `common`/`out_dir` entry only
+/// counts when [`is_install_root`] holds for it).
+pub fn find_with(
+    home: Option<&Path>,
+    common: &[PathBuf],
+    out_dir: Option<&Path>,
+) -> Option<Location> {
+    if let Some(home) = home {
+        return Some(Location::Home(home.to_path_buf()));
+    }
+    for dir in common {
+        if is_install_root(dir) {
+            return Some(Location::System(dir.clone()));
+        }
+    }
+    if let Some(out_dir) = out_dir {
+        if is_install_root(out_dir) {
+            return Some(Location::OutDir(out_dir.to_path_buf()));
+        }
+    }
+    None
+}
+
+/// Locate the shader-slang artifacts: `SHADER_SLANG_HOME`, then the
+/// [`common_locations`], then `out_dir`. The library passes
+/// `$OUT_DIR/slang-artifact` as `out_dir`, and only when the `build` feature
+/// is enabled; the build script passes `None` (it is itself producing the
+/// `$OUT_DIR` artifacts).
+pub fn find(home: Option<&Path>, out_dir: Option<&Path>) -> Option<Location> {
+    find_with(home, &common_locations(), out_dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn temp_root(tag: &str) -> PathBuf {
+        let dir = env::temp_dir().join(format!(
+            "shader-slang-dev-detect-{}-{tag}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn fake_install(root: &Path) {
+        let bin = root.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(bin.join(exe_name("slangc")), b"fake slangc").unwrap();
+    }
+
+    #[test]
+    fn exe_name_adds_suffix_only_on_windows() {
+        if cfg!(windows) {
+            assert_eq!(exe_name("slangc"), "slangc.exe");
+        } else {
+            assert_eq!(exe_name("slangc"), "slangc");
+        }
+    }
+
+    #[test]
+    fn install_root_requires_bin_slangc() {
+        let dir = temp_root("is-install-root");
+        let root = dir.join("root");
+        fs::create_dir_all(&root).unwrap();
+        assert!(!is_install_root(&root));
+        fake_install(&root);
+        assert!(is_install_root(&root));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn find_prefers_home_then_common_then_out_dir() {
+        let dir = temp_root("find-order");
+        let home = dir.join("home");
+        let common = dir.join("common");
+        let out = dir.join("out");
+        let empty = dir.join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        fake_install(&home);
+        fake_install(&common);
+        fake_install(&out);
+
+        // SHADER_SLANG_HOME is authoritative: used as-is, even unvalidated.
+        let bogus = dir.join("bogus");
+        fs::create_dir_all(&bogus).unwrap();
+        assert_eq!(
+            find_with(Some(&bogus), std::slice::from_ref(&common), Some(&out)),
+            Some(Location::Home(bogus))
+        );
+        // Then the first valid common location.
+        let commons = [empty.clone(), common.clone()];
+        assert_eq!(
+            find_with(None, &commons, Some(&out)),
+            Some(Location::System(common))
+        );
+        // Then $OUT_DIR.
+        assert_eq!(
+            find_with(None, std::slice::from_ref(&empty), Some(&out)),
+            Some(Location::OutDir(out))
+        );
+        // Nothing valid anywhere.
+        assert!(find_with(None, std::slice::from_ref(&empty), Some(&empty)).is_none());
+        assert!(find_with(None, &[], None).is_none());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn common_locations_are_os_and_arch_specific() {
+        let locs = common_locations();
+        assert!(!locs.is_empty());
+        let os = os_name();
+        let arch = arch();
+        if cfg!(target_os = "linux") {
+            assert!(locs.contains(&PathBuf::from("/usr/local")));
+            assert!(locs.contains(&PathBuf::from("/opt/slang")));
+        } else if cfg!(target_os = "macos") {
+            assert!(locs.contains(&PathBuf::from("/opt/homebrew")));
+            assert!(locs.contains(&PathBuf::from("/opt/slang")));
+        } else if cfg!(target_os = "windows") {
+            assert!(locs.contains(&PathBuf::from(r"C:\slang")));
+            assert!(locs.contains(&PathBuf::from(format!(r"C:\slang-{arch}"))));
+        }
+        if !cfg!(target_os = "windows") && os != "unknown" {
+            assert!(locs.contains(&PathBuf::from(format!("/opt/slang-{os}-{arch}"))));
+        }
+    }
+}

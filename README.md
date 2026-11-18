@@ -1,17 +1,48 @@
 # shader-slang-dev
 
-A Rust crate that builds the [shader-slang](https://github.com/shader-slang/slang)
-compiler toolchain (`slangc` and friends) from source and locates the built
-artifacts from another crate's `build.rs`:
+A Rust crate that locates an installed [shader-slang](https://github.com/shader-slang/slang)
+compiler toolchain (`slangc` and friends) and exposes `PathBuf` accessors for
+the binaries, libraries, headers and share directory. With the single
+`build` feature it can additionally build the toolchain from source or from
+the downloaded release tarballs into `$OUT_DIR`, and install the artifacts
+into a prefix (`install_artifacts`, or the `shader-slang-dev-installer`
+binary).
 
-- **`shader-slang-dev`** builds the shader-slang `2026.21` toolchain from
-  source with static linking enabled and installs it in the same layout as
-  the shader-slang release tarballs, and exposes `PathBuf` accessors for the
-  installed binaries, libraries, headers and share directory. The
-  shader-slang source is not vendored in this repository (a submodule would
-  make the crate too large to publish); by default `build.rs` clones tag
-  `v2026.21` with all submodules into `$OUT_DIR`, or fetches a source tarball
-  from `SHADER_SLANG_SOURCE_URL` when that variable is set.
+- **`shader-slang-dev`** locates the shader-slang `2026.21` toolchain and
+  exposes `PathBuf` accessors for the installed binaries, libraries, headers
+  and share directory.
+
+## Locating an installation
+
+The artifact root is resolved at runtime, in this order:
+
+1. **`$SHADER_SLANG_HOME`** — an install prefix containing `bin/slangc`,
+   whether it was built and installed from source or installed from a
+   downloaded release tarball:
+   ```sh
+   export SHADER_SLANG_HOME=/opt/slang-2026.21-linux-x86_64
+   ```
+2. **Common install locations**, per OS and CPU architecture (see
+   `shader_slang_dev::common_locations()`); a location only counts when it
+   contains `bin/slangc`:
+   - Linux: `/usr/local`, `/usr`, `/opt/slang`, `/opt/shader-slang`,
+     `/opt/slang-<arch>`, `/opt/slang-linux-<arch>` (the same two under
+     `/usr/local`), `$HOME/.local`, `$HOME/slang`, `$HOME/slang-linux-<arch>`
+   - macOS: `/usr/local`, `/opt/homebrew`, `/opt/slang`, `/opt/shader-slang`,
+     `/opt/slang-<arch>`, `/opt/slang-macos-<arch>` (the same two under
+     `/usr/local`), `$HOME/.local`, `$HOME/slang`, `$HOME/slang-macos-<arch>`
+   - Windows: `%ProgramFiles%\slang`, `%ProgramFiles%\shader-slang` (and the
+     `(x86)` / `ProgramW6432` variants), `%LOCALAPPDATA%\slang`,
+     `%LOCALAPPDATA%\Programs\slang`, `C:\slang`, `C:\slang-<arch>`,
+     `C:\slang-windows-<arch>`, `%USERPROFILE%\slang`,
+     `%USERPROFILE%\slang-windows-<arch>`
+3. **`$OUT_DIR/slang-artifact`** — only when the `build` feature is enabled
+   and the build script produced artifacts there.
+
+`shader_slang_dev::locate()` returns where the artifacts were found,
+`shader_slang_dev::source()` reports `"home"`, `"system"`, `"source"`,
+`"download"` or `"none"`, and `shader_slang_dev::artifact_root()` panics with
+the list of searched locations when nothing is found.
 
 ## Usage
 
@@ -19,32 +50,38 @@ artifacts from another crate's `build.rs`:
 [build-dependencies]
 shader-slang-dev = "1"
 ```
-
 ```rust
-fn main() {
-    let slangc = shader_slang_dev::slangc();
-    // Compile shaders with the built slangc:
-    //   std::process::Command::new(slangc).arg(...).status().unwrap();
-    // Link against the built libraries with:
-    //   shader_slang_dev::lib_dir()   // -> pass as `-L <dir>` or as
-    //  `cargo::rustc-link-search=[KIND=]<dir>` in cargo build script.
-    // Compile against the headers with:
-    //   shader_slang_dev::include_dir() // -> pass as `-I <dir>`
-}
+let slangc = shader_slang_dev::slangc();
+// Compile shaders with the located slangc:
+//   std::process::Command::new(slangc).arg(...).status().unwrap();
+// Link against the located libraries with:
+//   shader_slang_dev::lib_dir()   // -> pass as `-L <dir>` or as
+//  `cargo::rustc-link-search=[KIND=]<dir>` in cargo build script.
+// Compile against the headers with:
+//   shader_slang_dev::include_dir() // -> pass as `-I <dir>`
 ```
 
 ## Versioning
 
 The crate is versioned with plain semver (`1.0.0`); it does not carry the
 slang release as `+<version>` build metadata. The shader-slang release it
-builds is `2026.21`, pinned by the git tag `v2026.21` that `build.rs` clones
-by default. To build from a source tarball instead, point
-`SHADER_SLANG_SOURCE_URL` at a tarball of that release (see below).
+pins is `2026.21`, tag `v2026.21` (cloned by the `build` feature's default
+source path; see below).
 
-## How it builds
+## Building from source or tarballs: the `build` feature
 
-`build.rs` obtains the shader-slang source into `$OUT_DIR` in one of two
-ways:
+The single `build` feature — **disabled by default** — gates all support for
+producing shader-slang artifacts:
+
+```toml
+[build-dependencies]
+shader-slang-dev = { version = "1", features = ["build"] }
+```
+
+When enabled, the optional build dependencies (`cmake`, `flate2`, `tar`,
+`ureq`, `url`) are compiled, `build.rs` obtains the shader-slang source into
+`$OUT_DIR` in one of two ways, and the `install_artifacts` function plus the
+`shader-slang-dev-installer` binary become available:
 
 - **Default (both URL variables unset or empty):** a shallow git clone of
   `https://github.com/shader-slang/slang.git` at tag `v2026.21` with
@@ -76,15 +113,20 @@ tree has the same layout as the shader-slang release tarballs:
   (`slang/agent-skills/`).
 - the license and third-party notice files at the root.
 
+If an installation is already available through `$SHADER_SLANG_HOME` or a
+common location (see above), the build is **skipped** — the lookup order
+prefers those over `$OUT_DIR` anyway, so building would be wasted work.
+
+Changing `SHADER_SLANG_SOURCE_URL` or `SHADER_SLANG_DIST_URL` re-runs the
+build script (`cargo::rerun-if-env-changed`), so the build follows the new
+value.
+
 The build requires `git`, `cmake` (>= 3.20, for `cmake --install --strip`)
 and a C/C++ toolchain. Linux is fully supported; macOS and Windows support
 is best-effort. On Windows the clone runs with `core.longpaths=true` so the
 submodule checkouts under the deep `$OUT_DIR` path succeed.
 
-Changing `SHADER_SLANG_SOURCE_URL` re-runs the build script
-(`cargo::rerun-if-env-changed`), so the build follows the new value.
-
-### Using prebuilt binaries
+### Using prebuilt binaries (`SHADER_SLANG_DIST_URL`)
 
 Setting the environment variable `SHADER_SLANG_DIST_URL` to a non-empty
 `https` or `file` URL of a shader-slang distribution tarball makes
@@ -95,7 +137,7 @@ as if they had been built from source and installed — instead of building
 from source:
 
 ```sh
-SHADER_SLANG_DIST_URL=https://github.com/shader-slang/slang/releases/download/v2026.21/slang-2026.21-linux-x86_64.tar.gz cargo build
+SHADER_SLANG_DIST_URL=https://github.com/shader-slang/slang/releases/download/v2026.21/slang-2026.21-linux-x86_64.tar.gz cargo build --features build
 ```
 
 An unset or empty variable (the default) builds from source. Changing
@@ -109,9 +151,30 @@ The two provenances differ in what they provide:
   ship **shared** libraries (and import `.lib` files on Windows) instead,
   plus the prebuilt `slang-llvm` backend plugin and `libgfx`.
 
-The `shader_slang_dev::SOURCE` constant (`"source"` or `"download"`) tells
-the two apart. The URLs the build used are exposed as the
-`shader_slang_dev::SHADER_SLANG_SOURCE_URL` and
-`shader_slang_dev::SHADER_SLANG_DIST_URL` constants (both are `""` when the
+For `$OUT_DIR` artifacts, `shader_slang_dev::source()` tells the two apart
+(`"source"` vs `"download"`); artifacts found via `$SHADER_SLANG_HOME` or a
+common location report `"home"` / `"system"`. The URLs the build used are
+exposed as the `shader_slang_dev::SHADER_SLANG_SOURCE_URL` and
+`shader_slang_dev::SHADER_SLANG_DIST_URL` constants (each `""` when the
 corresponding variable was unset or empty; an empty
 `SHADER_SLANG_SOURCE_URL` means the source came from a git clone).
+
+### Installing the artifacts: `install_artifacts` / `shader-slang-dev-installer`
+
+With the `build` feature, `shader_slang_dev::install_artifacts` recursively
+copies the located artifact tree (the one `artifact_root()` resolves — from
+`$SHADER_SLANG_HOME`, a common location, or the `$OUT_DIR` build) into a
+given install prefix, recreating symlinks with their original targets:
+
+```rust,no_run
+shader_slang_dev::install_artifacts(std::path::Path::new("/opt/slang")).unwrap();
+```
+
+The `shader-slang-dev-installer` binary (built only with the `build`
+feature) does the same from the command line:
+
+```sh
+cargo run --features build --bin shader-slang-dev-installer -- /opt/slang
+# then point the crate at it:
+export SHADER_SLANG_HOME=/opt/slang
+```
