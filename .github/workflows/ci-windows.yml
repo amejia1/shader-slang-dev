@@ -26,9 +26,11 @@ jobs:
       - name: Download the shader-slang release tarball
         run: curl.exe -fL --retry 3 -o slang.tar.gz "${{ matrix.dist-url }}"
       - name: Extract the release tarball
+        # The release tarballs have no top-level directory (bin/, lib/, ...
+        # at the archive root), so no --strip-components.
         run: |
           New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\slang-home" | Out-Null
-          tar -xzf slang.tar.gz -C "$env:RUNNER_TEMP\slang-home" --strip-components=1
+          tar -xzf slang.tar.gz -C "$env:RUNNER_TEMP\slang-home"
       - name: Format check
         run: cargo fmt --all -- --check
       - name: Clippy (default features — detection only)
@@ -54,7 +56,7 @@ jobs:
       - name: Test detection of a common install location
         run: |
           New-Item -ItemType Directory -Force -Path "C:\slang-windows-${{ matrix.arch }}" | Out-Null
-          tar -xzf slang.tar.gz -C "C:\slang-windows-${{ matrix.arch }}" --strip-components=1
+          tar -xzf slang.tar.gz -C "C:\slang-windows-${{ matrix.arch }}"
           cargo test --workspace
 
   # Building shader-slang from source takes a long time (> 30 min), so these
