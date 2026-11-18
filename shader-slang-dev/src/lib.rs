@@ -8,9 +8,13 @@
 //! 1. `$SHADER_SLANG_HOME` — an install prefix containing `bin/slangc`,
 //!    whether it was built and installed from source or installed from a
 //!    downloaded release tarball ([`SHADER_SLANG_HOME_ENV_VAR`]).
+//!    Authoritative: when set, it is used as-is.
 //! 2. Common per-OS install locations ([`common_locations`]), including
 //!    architecture-specific directories matching the release-tarball naming
-//!    (`slang-<os>-<arch>`).
+//!    (`slang-<os>-<arch>`). A location only counts when it provides the
+//!    pinned release ([`is_pinned_install_root`]: `bin/slangc` plus the
+//!    versioned standard-module tree), so an install of a different slang
+//!    release is not picked up.
 //! 3. `$OUT_DIR/slang-artifact` — only when the `build` feature is enabled
 //!    and the build script produced artifacts there.
 //!
@@ -54,7 +58,7 @@ pub use detect::Location;
 use std::path::{Path, PathBuf};
 
 /// The shader-slang release this crate pins (`2026.21`, tag `v2026.21`).
-pub const SLANG_VERSION: &str = "2026.21";
+pub const SLANG_VERSION: &str = detect::SLANG_VERSION;
 
 /// Name of the environment variable that points at a shader-slang install
 /// prefix (a directory containing `bin/slangc`), whether it was built and
@@ -104,10 +108,19 @@ pub fn common_locations() -> Vec<PathBuf> {
     detect::common_locations()
 }
 
-/// Whether `path` looks like a shader-slang install prefix (it contains
-/// `bin/slangc`, with the platform `.exe` suffix on Windows).
+/// Whether `path` looks like a shader-slang install prefix at all (it
+/// contains `bin/slangc`, with the platform `.exe` suffix on Windows).
 pub fn is_install_root(path: &Path) -> bool {
     detect::is_install_root(path)
+}
+
+/// Whether `path` provides the pinned shader-slang release ([`SLANG_VERSION`]):
+/// an install prefix ([`is_install_root`]) that also carries the versioned
+/// standard-module tree `slang-standard-module-<SLANG_VERSION>` under `lib/`
+/// or `bin/`. Common locations and the `$OUT_DIR` build are only accepted
+/// when this holds.
+pub fn is_pinned_install_root(path: &Path) -> bool {
+    detect::is_pinned_install_root(path)
 }
 
 /// How the artifacts in use were obtained: `"home"` (`SHADER_SLANG_HOME`),
@@ -150,8 +163,8 @@ pub fn artifact_root() -> PathBuf {
         panic!(
             "no shader-slang installation found (searched: {})\n\
              set ${SHADER_SLANG_HOME_ENV_VAR} to an install prefix containing bin/slangc, \
-             install shader-slang into a common location, or enable the `build` feature to \
-             build it into $OUT_DIR",
+             install shader-slang {SLANG_VERSION} into a common location, or enable the \
+             `build` feature to build it into $OUT_DIR",
             searched.join(", ")
         )
     })

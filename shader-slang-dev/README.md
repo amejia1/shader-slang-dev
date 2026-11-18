@@ -13,20 +13,22 @@ directory:
 - `share_dir()` — the directory holding the installed share data (documentation under `doc/slang/`, agent skills under `slang/agent-skills/`).
 - `locate()` — where the artifacts were found (`Location::Home` / `System` / `OutDir`), `None` when nothing is found.
 - `source()` — how the artifacts in use were obtained: `"home"`, `"system"`, `"source"`, `"download"` or `"none"`.
-- `shader_slang_home()`, `common_locations()`, `is_install_root()` — the detection inputs (`$SHADER_SLANG_HOME`, the common per-OS/per-arch locations, the `bin/slangc` check).
+- `shader_slang_home()`, `common_locations()`, `is_install_root()`, `is_pinned_install_root()` — the detection inputs (`$SHADER_SLANG_HOME`, the common per-OS/per-arch locations, the `bin/slangc` check, and the pinned-release check).
 - `SLANG_VERSION` — the shader-slang release pinned (`2026.21`); `SHADER_SLANG_HOME_ENV_VAR` — `"SHADER_SLANG_HOME"`; `SHADER_SLANG_SOURCE_URL` / `SHADER_SLANG_DIST_URL` — the URLs the build used (each `""` when the corresponding variable was unset or empty; an empty `SHADER_SLANG_SOURCE_URL` means the source came from a git clone).
 
 The artifact root is resolved at runtime, in this order:
 
 1. `$SHADER_SLANG_HOME` — an install prefix containing `bin/slangc`, whether
    it was built and installed from source or installed from a downloaded
-   release tarball.
+   release tarball. Authoritative: when set, it is used as-is.
 2. Common install locations per OS and CPU architecture (Linux: `/usr/local`,
    `/usr`, `/opt/slang`, `/opt/shader-slang`, `/opt/slang-<arch>`,
    `/opt/slang-linux-<arch>`, ..., `$HOME/.local`; macOS: additionally
    `/opt/homebrew`; Windows: `%ProgramFiles%\slang`, `C:\slang`,
-   `C:\slang-windows-<arch>`, ...). A location only counts when it contains
-   `bin/slangc`.
+   `C:\slang-windows-<arch>`, ...). A location only counts when it provides
+   the pinned release (`is_pinned_install_root()`: `bin/slangc` plus the
+   versioned standard-module tree `lib/slang-standard-module-2026.21`), so an
+   install of a different slang release is not picked up.
 3. `$OUT_DIR/slang-artifact` — only when the `build` feature is enabled and
    the build script produced artifacts there.
 

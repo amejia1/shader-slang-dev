@@ -9,16 +9,23 @@
 //! 1. `$SHADER_SLANG_HOME` — an install prefix containing `bin/slangc`,
 //!    whether it was built and installed from source or extracted from a
 //!    downloaded release tarball. Authoritative: when set and non-empty it
-//!    is used as-is.
+//!    is used as-is, without further validation.
 //! 2. Common per-OS install locations (see [`common_locations`]), including
 //!    architecture-specific directories matching the release-tarball naming
-//!    (`slang-<os>-<arch>`).
+//!    (`slang-<os>-<arch>`). A location only counts when
+//!    [`is_pinned_install_root`] holds for it, i.e. it provides the pinned
+//!    release ([`SLANG_VERSION`]): `bin/slangc` plus the versioned
+//!    standard-module tree under `lib/` or `bin/`.
 //! 3. `$OUT_DIR/slang-artifact` — the artifacts this crate's build script
-//!    produced; only passed in by the library when the `build` feature is
-//!    enabled.
+//!    produced (always the pinned release); only passed in by the library
+//!    when the `build` feature is enabled.
 
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
+
+/// The shader-slang release this crate pins (`2026.21`, tag `v2026.21`).
+pub const SLANG_VERSION: &str = "2026.21";
 
 /// Environment variable pointing at a shader-slang install prefix (a
 /// directory containing `bin/slangc`, `lib/`, ...). Whether the install was
@@ -81,10 +88,37 @@ pub fn exe_name(name: &str) -> String {
     }
 }
 
-/// Whether `root` looks like a shader-slang install prefix: it contains
-/// `bin/slangc` (with the platform `.exe` suffix on Windows).
+/// Whether `root` looks like a shader-slang install prefix at all: it
+/// contains `bin/slangc` (with the platform `.exe` suffix on Windows).
 pub fn is_install_root(root: &Path) -> bool {
     root.join("bin").join(exe_name("slangc")).is_file()
+}
+
+/// Whether `root` provides the pinned shader-slang release ([`SLANG_VERSION`]):
+/// an install prefix ([`is_install_root`]) that also carries the versioned
+/// standard-module tree `slang-standard-module-<SLANG_VERSION>` under `lib/`
+/// or `bin/` — one level into `lib/` covers multiarch layouts such as
+/// `/usr/lib/x86_64-linux-gnu/`.
+///
+/// Common locations and the `$OUT_DIR` build are only accepted when this
+/// holds, so an install of a different slang release (e.g. a distro package)
+/// is not mistaken for the toolchain this crate provides.
+pub fn is_pinned_install_root(root: &Path) -> bool {
+    if !is_install_root(root) {
+        return false;
+    }
+    let name = format!("slang-standard-module-{SLANG_VERSION}");
+    if root.join("lib").join(&name).is_dir() || root.join("bin").join(&name).is_dir() {
+        return true;
+    }
+    if let Ok(entries) = fs::read_dir(root.join("lib")) {
+        for entry in entries.flatten() {
+            if entry.path().join(&name).is_dir() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// The `SHADER_SLANG_HOME` value as a path, or `None` when unset or empty.
@@ -139,9 +173,9 @@ pub fn arch() -> &'static str {
 /// release-tarball naming (`slang-<os>-<arch>` — e.g. where
 /// `slang-2026.21-linux-x86_64.tar.gz` gets extracted in place under `/opt`).
 ///
-/// A location only counts when [`is_install_root`] holds for it (it contains
-/// `bin/slangc`), so unrelated prefixes (`/usr`, `/usr/local` on a machine
-/// without slang, ...) are skipped.
+/// A location only counts when [`is_pinned_install_root`] holds for it, so
+/// unrelated prefixes (`/usr`, `/usr/local` on a machine without a pinned
+/// slang, installs of other slang releases, ...) are skipped.
 pub fn common_locations() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     let os = os_name();
@@ -196,7 +230,7 @@ pub fn common_locations() -> Vec<PathBuf> {
 /// The lookup itself, with the candidate lists passed in so tests can
 /// substitute their own: `SHADER_SLANG_HOME` first (authoritative, used
 /// as-is), then `common`, then `out_dir` (each `common`/`out_dir` entry only
-/// counts when [`is_install_root`] holds for it).
+/// counts when [`is_pinned_install_root`] holds for it).
 pub fn find_with(
     home: Option<&Path>,
     common: &[PathBuf],
@@ -206,19 +240,19 @@ pub fn find_with(
         return Some(Location::Home(home.to_path_buf()));
     }
     for dir in common {
-        if is_install_root(dir) {
+        if is_pinned_install_root(dir) {
             return Some(Location::System(dir.clone()));
         }
     }
     if let Some(out_dir) = out_dir {
-        if is_install_root(out_dir) {
+        if is_pinned_install_root(out_dir) {
             return Some(Location::OutDir(out_dir.to_path_buf()));
         }
     }
     None
 }
 
-/// Locate the shader-slang artifacts: `SHADER_SLANG_HOME`, then the
+/// Locate the shader-slang artifacts: `$SHADER_SLANG_HOME`, then the
 /// [`common_locations`], then `out_dir`. The library passes
 /// `$OUT_DIR/slang-artifact` as `out_dir`, and only when the `build` feature
 /// is enabled; the build script passes `None` (it is itself producing the
@@ -230,7 +264,6 @@ pub fn find(home: Option<&Path>, out_dir: Option<&Path>) -> Option<Location> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     fn temp_root(tag: &str) -> PathBuf {
         let dir = env::temp_dir().join(format!(
@@ -242,10 +275,22 @@ mod tests {
         dir
     }
 
+    /// A minimal install prefix: just `bin/slangc`.
     fn fake_install(root: &Path) {
         let bin = root.join("bin");
         fs::create_dir_all(&bin).unwrap();
         fs::write(bin.join(exe_name("slangc")), b"fake slangc").unwrap();
+    }
+
+    /// A full install prefix of the pinned release: `bin/slangc` plus the
+    /// versioned standard-module tree under `lib/`.
+    fn fake_pinned_install(root: &Path) {
+        fake_install(root);
+        let tree = root
+            .join("lib")
+            .join(format!("slang-standard-module-{SLANG_VERSION}"));
+        fs::create_dir_all(&tree).unwrap();
+        fs::write(tree.join("core.slang-module"), b"module;").unwrap();
     }
 
     #[test]
@@ -269,16 +314,53 @@ mod tests {
     }
 
     #[test]
-    fn find_prefers_home_then_common_then_out_dir() {
+    fn pinned_root_requires_the_versioned_module_tree() {
+        let dir = temp_root("is-pinned-root");
+        let root = dir.join("root");
+        fs::create_dir_all(&root).unwrap();
+        assert!(!is_pinned_install_root(&root));
+        // bin/slangc alone is not enough.
+        fake_install(&root);
+        assert!(is_install_root(&root));
+        assert!(!is_pinned_install_root(&root));
+        // A module tree of a different slang release does not count either.
+        let other = root.join("lib").join("slang-standard-module-2026.18.2");
+        fs::create_dir_all(&other).unwrap();
+        assert!(!is_pinned_install_root(&root));
+        // The pinned tree under lib/ (or bin/, or a multiarch lib/<triple>/).
+        fake_pinned_install(&root);
+        assert!(is_pinned_install_root(&root));
+        let multiarch = dir.join("multiarch");
+        fake_install(&multiarch);
+        let tree = multiarch
+            .join("lib")
+            .join("x86_64-linux-gnu")
+            .join(format!("slang-standard-module-{SLANG_VERSION}"));
+        fs::create_dir_all(&tree).unwrap();
+        assert!(is_pinned_install_root(&multiarch));
+        let in_bin = dir.join("bin-tree");
+        fake_install(&in_bin);
+        let tree = in_bin
+            .join("bin")
+            .join(format!("slang-standard-module-{SLANG_VERSION}"));
+        fs::create_dir_all(&tree).unwrap();
+        assert!(is_pinned_install_root(&in_bin));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn find_prefers_home_then_pinned_common_then_out_dir() {
         let dir = temp_root("find-order");
         let home = dir.join("home");
         let common = dir.join("common");
         let out = dir.join("out");
         let empty = dir.join("empty");
+        let bin_only = dir.join("bin-only");
         fs::create_dir_all(&empty).unwrap();
-        fake_install(&home);
-        fake_install(&common);
-        fake_install(&out);
+        fake_pinned_install(&home);
+        fake_pinned_install(&common);
+        fake_pinned_install(&out);
+        fake_install(&bin_only);
 
         // SHADER_SLANG_HOME is authoritative: used as-is, even unvalidated.
         let bogus = dir.join("bogus");
@@ -287,8 +369,9 @@ mod tests {
             find_with(Some(&bogus), std::slice::from_ref(&common), Some(&out)),
             Some(Location::Home(bogus))
         );
-        // Then the first valid common location.
-        let commons = [empty.clone(), common.clone()];
+        // Then the first pinned common location (a bin/slangc-only prefix is
+        // skipped).
+        let commons = [empty.clone(), bin_only.clone(), common.clone()];
         assert_eq!(
             find_with(None, &commons, Some(&out)),
             Some(Location::System(common))
@@ -299,7 +382,7 @@ mod tests {
             Some(Location::OutDir(out))
         );
         // Nothing valid anywhere.
-        assert!(find_with(None, std::slice::from_ref(&empty), Some(&empty)).is_none());
+        assert!(find_with(None, std::slice::from_ref(&bin_only), Some(&empty)).is_none());
         assert!(find_with(None, &[], None).is_none());
         fs::remove_dir_all(&dir).unwrap();
     }

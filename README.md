@@ -18,13 +18,16 @@ The artifact root is resolved at runtime, in this order:
 
 1. **`$SHADER_SLANG_HOME`** — an install prefix containing `bin/slangc`,
    whether it was built and installed from source or installed from a
-   downloaded release tarball:
+   downloaded release tarball. Authoritative: when set, it is used as-is:
    ```sh
    export SHADER_SLANG_HOME=/opt/slang-2026.21-linux-x86_64
    ```
 2. **Common install locations**, per OS and CPU architecture (see
-   `shader_slang_dev::common_locations()`); a location only counts when it
-   contains `bin/slangc`:
+   `shader_slang_dev::common_locations()`). A location only counts when it
+   provides the pinned release `2026.21` — `bin/slangc` plus the versioned
+   standard-module tree `lib/slang-standard-module-2026.21` (see
+   `shader_slang_dev::is_pinned_install_root()`) — so an install of a
+   *different* slang release (e.g. a distro package) is not picked up:
    - Linux: `/usr/local`, `/usr`, `/opt/slang`, `/opt/shader-slang`,
      `/opt/slang-<arch>`, `/opt/slang-linux-<arch>` (the same two under
      `/usr/local`), `$HOME/.local`, `$HOME/slang`, `$HOME/slang-linux-<arch>`
