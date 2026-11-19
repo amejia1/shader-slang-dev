@@ -1,8 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["shader-slang-dev"]
+members = ["shader-slang-dev", "shader-slang-src", "shader-slang-src-*"]
 
 [workspace.package]
+version = "1.0.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/amejia1/shader-slang-dev"

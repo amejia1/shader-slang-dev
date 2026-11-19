@@ -33,6 +33,7 @@ fn fake_install(root: &Path) {
     .unwrap();
 }
 
+#[cfg(not(feature = "vendored"))]
 fn slangc_name() -> &'static str {
     if cfg!(windows) {
         "slangc.exe"
@@ -41,6 +42,7 @@ fn slangc_name() -> &'static str {
     }
 }
 
+#[cfg(not(feature = "vendored"))]
 #[test]
 fn shader_slang_home_env_var_is_used_first() {
     let _guard = ENV_LOCK.lock().unwrap();
@@ -63,6 +65,27 @@ fn shader_slang_home_env_var_is_used_first() {
 
     std::env::remove_var(shader_slang_dev::SHADER_SLANG_HOME_ENV_VAR);
     assert!(shader_slang_dev::shader_slang_home().is_none());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[cfg(feature = "vendored")]
+#[test]
+fn vendored_artifacts_ignore_shader_slang_home() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = temp_dir("ignored-home");
+    let home = dir.join("slang-home");
+    fake_install(&home);
+
+    std::env::set_var(shader_slang_dev::SHADER_SLANG_HOME_ENV_VAR, &home);
+    let vendored = shader_slang_dev::artifact_root();
+    assert_ne!(vendored, home);
+    assert_eq!(shader_slang_dev::source(), "vendored");
+    assert_eq!(
+        shader_slang_dev::locate(),
+        Some(shader_slang_dev::Location::Vendored(vendored))
+    );
+
+    std::env::remove_var(shader_slang_dev::SHADER_SLANG_HOME_ENV_VAR);
     let _ = fs::remove_dir_all(&dir);
 }
 

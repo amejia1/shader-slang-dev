@@ -26,38 +26,25 @@ jobs:
       - name: Download the shader-slang release tarball
         run: curl -fL --retry 3 -o slang.tar.gz "${{ matrix.dist-url }}"
       - name: Extract the release tarball
-        # The release tarballs have no top-level directory (bin/, lib/, ...
-        # at the archive root), so no --strip-components.
         run: |
           mkdir -p "$RUNNER_TEMP/slang-home"
           tar -xzf slang.tar.gz -C "$RUNNER_TEMP/slang-home"
       - name: Format check
         run: cargo fmt --all -- --check
+      - name: ShellCheck source generator
+        run: shellcheck -s dash devops/package-shader-slang-source.sh
       - name: Clippy (default features — detection only)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy -p shader-slang-dev --all-targets -- -D warnings
       - name: Test with SHADER_SLANG_HOME
-        run: SHADER_SLANG_HOME="$RUNNER_TEMP/slang-home" cargo test --workspace
-      - name: Test the build feature (distribution tarball into $OUT_DIR)
-        env:
-          SHADER_SLANG_DIST_URL: ${{ matrix.dist-url }}
-        run: cargo test --workspace --features build
-      - name: Clippy with the build feature
-        run: SHADER_SLANG_HOME="$RUNNER_TEMP/slang-home" cargo clippy --workspace --all-targets --features build -- -D warnings
-      - name: Test the shader-slang-dev-installer binary
-        run: |
-          SHADER_SLANG_HOME="$RUNNER_TEMP/slang-home" cargo run --features build --bin shader-slang-dev-installer -- "$RUNNER_TEMP/slang-installed"
-          SHADER_SLANG_HOME="$RUNNER_TEMP/slang-installed" cargo test --workspace
+        run: SHADER_SLANG_HOME="$RUNNER_TEMP/slang-home" cargo test -p shader-slang-dev
       - name: Test detection of a common install location
         run: |
           sudo mkdir -p "/opt/slang-linux-${{ matrix.arch }}"
           sudo tar -xzf slang.tar.gz -C "/opt/slang-linux-${{ matrix.arch }}"
-          cargo test --workspace
+          cargo test -p shader-slang-dev
 
-  # Building shader-slang from source takes a long time (> 30 min), so these
-  # steps run in a separate job after all the fast tests above. Each source
-  # build uses its own target directory so the second one really re-clones.
-  source-build:
-    name: source-build (x86_64)
+  vendored:
+    name: vendored (x86_64)
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -66,18 +53,11 @@ jobs:
         uses: actions/checkout@v4
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-      - name: Create a shader-slang source tarball (with submodule checkouts)
+      - name: Test the vendored workspace
+        run: cargo test --workspace --features vendored
+      - name: Clippy with vendored artifacts
+        run: cargo clippy --workspace --all-targets --features vendored -- -D warnings
+      - name: Test the shader-slang-dev-installer binary
         run: |
-          mkdir -p "$RUNNER_TEMP/slang-pkg"
-          git clone --depth 1 --branch v2026.21 --recurse-submodules --shallow-submodules \
-            https://github.com/shader-slang/slang.git "$RUNNER_TEMP/slang-pkg/slang"
-          find "$RUNNER_TEMP/slang-pkg/slang" -name .git -prune -exec rm -rf {} +
-          tar -czf "$RUNNER_TEMP/slang-source.tar.gz" -C "$RUNNER_TEMP/slang-pkg" slang
-          ls -la "$RUNNER_TEMP/slang-source.tar.gz"
-      - name: Test building from the source tarball (SHADER_SLANG_SOURCE_URL)
-        run: SHADER_SLANG_SOURCE_URL="file://$RUNNER_TEMP/slang-source.tar.gz" cargo test --workspace --features build
-      - name: Test building from a git clone (no environment variables set)
-        run: |
-          env -u SHADER_SLANG_HOME -u SHADER_SLANG_DIST_URL -u SHADER_SLANG_SOURCE_URL \
-            CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target-clone" \
-            cargo test --workspace --features build
+          cargo run --features vendored --bin shader-slang-dev-installer -- "$RUNNER_TEMP/slang-installed"
+          SHADER_SLANG_HOME="$RUNNER_TEMP/slang-installed" cargo test -p shader-slang-dev

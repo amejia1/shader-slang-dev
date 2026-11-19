@@ -1,57 +1,52 @@
 # shader-slang-dev
 
 Locates an installed [shader-slang](https://github.com/shader-slang/slang)
-compiler toolchain (release `2026.21`, tag `v2026.21`) and exposes `PathBuf`
-accessors for the installed binaries, libraries, headers and share
-directory:
+`2026.21` toolchain, or builds the vendored source with the `vendored` feature.
 
-- `slangc()` — the compiler binary; `binary(name)` — any other binary under `bin_dir()`.
-- `artifact_root()` — the install prefix the artifacts live in.
-- `bin_dir()` — the directory holding the binaries.
-- `lib_dir()` — the directory holding the static/shared libraries (for `-L` or `cargo::rustc-link-search=[KIND=]PATH`).
-- `include_dir()` — the directory holding the headers (for `-I`).
-- `share_dir()` — the directory holding the installed share data (documentation under `doc/slang/`, agent skills under `slang/agent-skills/`).
-- `locate()` — where the artifacts were found (`Location::Home` / `System` / `OutDir`), `None` when nothing is found.
-- `source()` — how the artifacts in use were obtained: `"home"`, `"system"`, `"source"`, `"download"` or `"none"`.
-- `shader_slang_home()`, `common_locations()`, `is_install_root()`, `is_pinned_install_root()` — the detection inputs (`$SHADER_SLANG_HOME`, the common per-OS/per-arch locations, the `bin/slangc` check, and the pinned-release check).
-- `SLANG_VERSION` — the shader-slang release pinned (`2026.21`); `SHADER_SLANG_HOME_ENV_VAR` — `"SHADER_SLANG_HOME"`; `SHADER_SLANG_SOURCE_URL` / `SHADER_SLANG_DIST_URL` — the URLs the build used (each `""` when the corresponding variable was unset or empty; an empty `SHADER_SLANG_SOURCE_URL` means the source came from a git clone).
+Accessors include:
 
-The artifact root is resolved at runtime, in this order:
+- `slangc()` and `binary(name)` for executables.
+- `artifact_root()`, `bin_dir()`, `lib_dir()`, `include_dir()`, and `share_dir()`.
+- `locate()` and `source()` for the selected origin.
+- `shader_slang_home()`, `common_locations()`, `is_install_root()`, and
+  `is_pinned_install_root()` for installed-toolchain discovery.
+- `SLANG_VERSION` and `SHADER_SLANG_HOME_ENV_VAR` constants.
 
-1. `$SHADER_SLANG_HOME` — an install prefix containing `bin/slangc`, whether
-   it was built and installed from source or installed from a downloaded
-   release tarball. Authoritative: when set, it is used as-is.
-2. Common install locations per OS and CPU architecture (Linux: `/usr/local`,
-   `/usr`, `/opt/slang`, `/opt/shader-slang`, `/opt/slang-<arch>`,
-   `/opt/slang-linux-<arch>`, ..., `$HOME/.local`; macOS: additionally
-   `/opt/homebrew`; Windows: `%ProgramFiles%\slang`, `C:\slang`,
-   `C:\slang-windows-<arch>`, ...). A location only counts when it provides
-   the pinned release (`is_pinned_install_root()`: `bin/slangc` plus the
-   versioned standard-module tree `lib/slang-standard-module-2026.21`), so an
-   install of a different slang release is not picked up.
-3. `$OUT_DIR/slang-artifact` — only when the `build` feature is enabled and
-   the build script produced artifacts there.
+## Default: installed toolchain
 
-With the single `build` feature (disabled by default), `build.rs` clones and
-builds shader-slang from source — or fetches the `SHADER_SLANG_SOURCE_URL` /
-`SHADER_SLANG_DIST_URL` tarballs — into `$OUT_DIR/slang-artifact` (skipping
-the build when an installation is already available through (1) or (2)), the
-optional build dependencies (`cmake`, `flate2`, `tar`, `ureq`, `url`) are
-compiled, and two installation entry points become available:
+The runtime lookup checks `$SHADER_SLANG_HOME` first, then common OS- and
+architecture-specific install locations. `SHADER_SLANG_HOME` is authoritative;
+common locations must contain `bin/slangc` and the pinned release's versioned
+standard-module tree. `locate()` returns `Location::Home` or
+`Location::System`, and `source()` returns `"home"` or `"system"`.
 
-- `install_artifacts(&Path)` — recursively copies the located artifact tree
-  into the given install prefix, recreating symlinks with their original
-  targets.
-- the `shader-slang-dev-installer` binary:
-  `cargo run --features build --bin shader-slang-dev-installer -- /opt/slang`
+Download and extract a release tarball yourself to use prebuilt artifacts,
+then set `SHADER_SLANG_HOME` to its root. The crate does not download source
+or distribution tarballs.
 
-The libraries available depend on how the `$OUT_DIR` artifacts were
-obtained: `source() == "source"` builds install the compiler and runtime as
-static libraries (`slang-compiler`, `slang-rt`), while `source() ==
-"download"` (prebuilt distribution tarball provided via
-`SHADER_SLANG_DIST_URL`) ships shared libraries instead. Installs found via
-`$SHADER_SLANG_HOME` or a common location are not classified by provenance;
-the tests probe the artifact tree for whichever library kind is present.
+## `vendored`: build the included source
 
-See the workspace `README.md` for the full build details, the common-location
-lists and usage examples.
+```toml
+[build-dependencies]
+shader-slang-dev = { version = "1", features = ["vendored"] }
+```
+
+The `shader-slang-src` dependency reassembles the complete source from its
+`shader-slang-src-*` partition crates, builds it with CMake, and installs it
+under its `$OUT_DIR/slang-artifact`. No clone or download occurs. This mode
+uses only `Location::Vendored`; `SHADER_SLANG_HOME` and common locations are
+ignored, and `source()` returns `"vendored"`.
+
+CMake >= 3.20 and a C/C++ toolchain are required. The build installs static
+compiler/runtime libraries and shared backend plugins. Manually installed
+release tarballs usually contain shared compiler libraries instead.
+
+`install_artifacts(&Path)` and the `shader-slang-dev-installer` binary are
+available with `vendored` and copy the vendored tree, preserving symlinks:
+
+```sh
+cargo run --features vendored --bin shader-slang-dev-installer -- /opt/slang
+```
+
+See the workspace `README.md` for the complete location lists, build layout,
+and source-update instructions.

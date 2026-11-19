@@ -1,0 +1,8 @@
+[package]
+name = "shader-slang-src-tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shader Slang 2026.21 source partition: tests"
+include = ["source.tar", "src/lib.rs"]

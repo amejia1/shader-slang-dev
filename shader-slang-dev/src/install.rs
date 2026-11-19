@@ -1,4 +1,4 @@
-//! Installing the located shader-slang artifacts (feature `build` only).
+//! Installing the located shader-slang artifacts (feature `vendored` only).
 
 use std::fs;
 use std::io;
@@ -7,8 +7,8 @@ use std::path::Path;
 use crate::{detect, locate};
 
 /// Recursively copy the located shader-slang artifact tree — the one
-/// [`crate::artifact_root`] resolves (`$SHADER_SLANG_HOME`, a common install
-/// location, or the `$OUT_DIR` build from source / from a downloaded tarball)
+/// [`crate::artifact_root`] resolves (the vendored build when that feature is
+/// enabled, otherwise `$SHADER_SLANG_HOME` or a common install location)
 /// — into `dest`, which is created when missing. Existing files under `dest`
 /// are overwritten.
 ///

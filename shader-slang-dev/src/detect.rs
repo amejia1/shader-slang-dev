@@ -1,8 +1,7 @@
 //! Detection of an existing shader-slang installation.
 //!
-//! This module is compiled into both the library (`mod detect;`) and the
-//! build script (`#[path = "src/detect.rs"] mod detect;` in `build.rs`), so
-//! the lookup rules live in exactly one place. It is `std`-only.
+//! This module is `std`-only. Vendored artifacts bypass this lookup and come
+//! directly from the `shader-slang-src` dependency.
 //!
 //! Lookup order (see [`find`]):
 //!
@@ -16,28 +15,21 @@
 //!    [`is_pinned_install_root`] holds for it, i.e. it provides the pinned
 //!    release ([`SLANG_VERSION`]): `bin/slangc` plus the versioned
 //!    standard-module tree under `lib/` or `bin/`.
-//! 3. `$OUT_DIR/slang-artifact` — the artifacts this crate's build script
-//!    produced (always the pinned release); only passed in by the library
-//!    when the `build` feature is enabled.
+//! 3. An optional vendored root — used by `find_with` tests and by callers
+//!    that explicitly provide one. The library's `vendored` feature instead
+//!    bypasses home and common locations entirely.
 
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The shader-slang release this crate pins (`2026.21`, tag `v2026.21`).
-pub const SLANG_VERSION: &str = "2026.21";
+/// The shader-slang release this crate pins.
+pub use crate::slang_version::SLANG_VERSION;
 
 /// Environment variable pointing at a shader-slang install prefix (a
 /// directory containing `bin/slangc`, `lib/`, ...). Whether the install was
 /// built from source or extracted from a downloaded tarball does not matter.
 pub const HOME_ENV_VAR: &str = "SHADER_SLANG_HOME";
-
-/// Directory name under `$OUT_DIR` holding the installed toolchain (the
-/// artifact root). Its layout matches the shader-slang release tarballs:
-/// `bin/`, `lib/`, `include/`, `share/` plus the license and documentation
-/// files.
-#[cfg_attr(not(feature = "build"), allow(dead_code))]
-pub const ARTIFACT_ROOT_DIR: &str = "slang-artifact";
 
 /// Where a located artifact root came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,9 +38,8 @@ pub enum Location {
     Home(PathBuf),
     /// From one of the [`common_locations`].
     System(PathBuf),
-    /// From `$OUT_DIR/slang-artifact` (only reachable with the `build`
-    /// feature enabled).
-    OutDir(PathBuf),
+    /// Built from the `shader-slang-src` source partitions.
+    Vendored(PathBuf),
 }
 
 // The build script uses only some of these methods depending on the `build`
@@ -58,7 +49,7 @@ impl Location {
     /// The artifact root path.
     pub fn path(&self) -> &Path {
         match self {
-            Location::Home(p) | Location::System(p) | Location::OutDir(p) => p,
+            Location::Home(p) | Location::System(p) | Location::Vendored(p) => p,
         }
     }
 
@@ -67,14 +58,14 @@ impl Location {
         match self {
             Location::Home(_) => "SHADER_SLANG_HOME",
             Location::System(_) => "a common install location",
-            Location::OutDir(_) => "$OUT_DIR",
+            Location::Vendored(_) => "shader-slang-src",
         }
     }
 
     /// Consume into the artifact root path.
     pub fn into_path(self) -> PathBuf {
         match self {
-            Location::Home(p) | Location::System(p) | Location::OutDir(p) => p,
+            Location::Home(p) | Location::System(p) | Location::Vendored(p) => p,
         }
     }
 }
@@ -100,8 +91,8 @@ pub fn is_install_root(root: &Path) -> bool {
 /// or `bin/` — one level into `lib/` covers multiarch layouts such as
 /// `/usr/lib/x86_64-linux-gnu/`.
 ///
-/// Common locations and the `$OUT_DIR` build are only accepted when this
-/// holds, so an install of a different slang release (e.g. a distro package)
+/// Common and vendored locations are only accepted when this holds, so an
+/// install of a different slang release (e.g. a distro package)
 /// is not mistaken for the toolchain this crate provides.
 pub fn is_pinned_install_root(root: &Path) -> bool {
     if !is_install_root(root) {
@@ -231,6 +222,7 @@ pub fn common_locations() -> Vec<PathBuf> {
 /// substitute their own: `SHADER_SLANG_HOME` first (authoritative, used
 /// as-is), then `common`, then `out_dir` (each `common`/`out_dir` entry only
 /// counts when [`is_pinned_install_root`] holds for it).
+#[cfg(any(test, not(feature = "vendored")))]
 pub fn find_with(
     home: Option<&Path>,
     common: &[PathBuf],
@@ -246,19 +238,17 @@ pub fn find_with(
     }
     if let Some(out_dir) = out_dir {
         if is_pinned_install_root(out_dir) {
-            return Some(Location::OutDir(out_dir.to_path_buf()));
+            return Some(Location::Vendored(out_dir.to_path_buf()));
         }
     }
     None
 }
 
-/// Locate the shader-slang artifacts: `$SHADER_SLANG_HOME`, then the
-/// [`common_locations`], then `out_dir`. The library passes
-/// `$OUT_DIR/slang-artifact` as `out_dir`, and only when the `build` feature
-/// is enabled; the build script passes `None` (it is itself producing the
-/// `$OUT_DIR` artifacts).
-pub fn find(home: Option<&Path>, out_dir: Option<&Path>) -> Option<Location> {
-    find_with(home, &common_locations(), out_dir)
+/// Locate installed shader-slang artifacts: `$SHADER_SLANG_HOME`, then the
+/// [`common_locations`].
+#[cfg(not(feature = "vendored"))]
+pub fn find(home: Option<&Path>) -> Option<Location> {
+    find_with(home, &common_locations(), None)
 }
 
 #[cfg(test)]
@@ -379,7 +369,7 @@ mod tests {
         // Then $OUT_DIR.
         assert_eq!(
             find_with(None, std::slice::from_ref(&empty), Some(&out)),
-            Some(Location::OutDir(out))
+            Some(Location::Vendored(out))
         );
         // Nothing valid anywhere.
         assert!(find_with(None, std::slice::from_ref(&bin_only), Some(&empty)).is_none());

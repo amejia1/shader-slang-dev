@@ -1,15 +1,11 @@
-//! `shader-slang-dev-installer` — install the located shader-slang artifacts
-//! into a prefix, from the command line.
+//! Install the located shader-slang artifacts into a prefix.
 //!
-//! The artifacts installed are the ones the `shader-slang-dev` crate locates:
-//! `$SHADER_SLANG_HOME`, a common install location, or the `$OUT_DIR` build
-//! produced with the `build` feature (this binary requires that feature).
-//! The tree is copied recursively and symlinks are preserved.
-//!
-//! Usage:
+//! This binary requires `vendored`, so the source is always the vendored build
+//! supplied by `shader-slang-src`. The tree is copied recursively and symlinks
+//! are preserved.
 //!
 //! ```sh
-//! cargo run --features build --bin shader-slang-dev-installer -- /opt/slang
+//! cargo run --features vendored --bin shader-slang-dev-installer -- /opt/slang
 //! # or, when installed on PATH:
 //! shader-slang-dev-installer /opt/slang
 //! ```
@@ -19,9 +15,8 @@ use std::process::ExitCode;
 
 const USAGE: &str = "usage: shader-slang-dev-installer <dest-dir>
 
-Recursively copies the located shader-slang artifacts ($SHADER_SLANG_HOME, a
-common install location, or the $OUT_DIR build with the `build` feature)
-into <dest-dir>, preserving symlinks.";
+Recursively copies the vendored shader-slang artifacts into <dest-dir>,
+preserving symlinks.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();

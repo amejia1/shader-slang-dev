@@ -1,0 +1,8 @@
+[package]
+name = "shader-slang-src-external-slang-tint-headers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shader Slang 2026.21 source partition: external/slang-tint-headers"
+include = ["source.tar", "src/lib.rs"]

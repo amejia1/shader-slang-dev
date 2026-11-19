@@ -1,42 +1,28 @@
 [package]
 name = "shader-slang-dev"
-version = "1.0.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Locate an installed shader-slang toolchain (slangc and friends); with the `build` feature, build it from source or release tarballs into $OUT_DIR and install the artifacts"
+description = "Locate an installed shader-slang toolchain, or build the vendored source with the `vendored` feature"
 build = "build.rs"
 readme = "README.md"
 
-# By default this crate only LOCATES an existing shader-slang installation at
-# runtime: $SHADER_SLANG_HOME (an install prefix containing bin/slangc,
-# whether built from source or installed from a downloaded tarball), then
-# common per-OS/per-architecture install locations (see src/detect.rs). The
-# single `build` feature (disabled by default) additionally lets build.rs
-# clone and build shader-slang from source — or fetch the
-# SHADER_SLANG_SOURCE_URL / SHADER_SLANG_DIST_URL tarballs — into
-# $OUT_DIR/slang-artifact (searched last), compiles the optional build
-# dependencies below, enables `shader_slang_dev::install_artifacts`, and
-# builds the `shader-slang-dev-installer` binary. When an installation is
-# already available via $SHADER_SLANG_HOME or a common location, the build
-# is skipped.
+# By default this crate only locates an existing shader-slang installation at
+# runtime: $SHADER_SLANG_HOME, then common per-OS/per-architecture locations.
+# The optional `vendored` feature builds the source supplied by shader-slang-src
+# and exclusively uses those artifacts instead of installed locations.
 
 [features]
 default = []
-build = ["dep:cmake", "dep:flate2", "dep:tar", "dep:ureq", "dep:url"]
-
-[build-dependencies]
-cmake = { version = "0.1", optional = true }
-flate2 = { version = "1", optional = true }
-tar = { version = "0.4", optional = true }
-ureq = { version = "3", optional = true }
-url = { version = "2", optional = true }
+vendored = ["dep:shader-slang-src"]
 
 [dependencies]
+shader-slang-src = { path = "../shader-slang-src", version = "=1.0.0", optional = true }
 
 [[bin]]
 name = "shader-slang-dev-installer"
 path = "src/bin/shader-slang-dev-installer.rs"
-required-features = ["build"]
+required-features = ["vendored"]
