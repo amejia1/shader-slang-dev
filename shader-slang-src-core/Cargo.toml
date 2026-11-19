@@ -1,8 +1,0 @@
-[package]
-name = "shader-slang-src-core"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-repository.workspace = true
-description = "Shader Slang 2026.21 source partition: AGENTS.md CLAUDE.md CMakeLists.txt CMakePresets.json CODE_OF_CONDUCT.md CONTRIBUTING.md flake.lock flake.nix LICENSE README.md REUSE.toml REVIEW.md slang-tag-version.h.in .clangd .clang-format .coderabbit.yaml .editorconfig .gitattributes .gitignore .gitmodules .lldbinit .mailmap .stylua.toml"
-include = ["source.tar", "src/lib.rs"]

@@ -1,8 +1,0 @@
-[package]
-name = "shader-slang-src-external-core"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-repository.workspace = true
-description = "Shader Slang 2026.21 source partition: external/build-llvm.ps1 external/build-llvm.sh external/bump-glslang.sh external/CMakeLists.txt external/glext.h external/llvm-coff-pageoffset12l.patch external/README.md external/renderdoc_app.h external/wglext.h external/.clang-format"
-include = ["source.tar", "src/lib.rs"]

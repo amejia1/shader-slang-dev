@@ -1,8 +1,0 @@
-[package]
-name = "shader-slang-src-external-nlohmann-json-module-bazel"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-repository.workspace = true
-description = "Shader Slang 2026.21 source partition: external/nlohmann-json/MODULE.bazel"
-include = ["source.tar", "src/lib.rs"]

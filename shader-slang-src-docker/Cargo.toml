@@ -1,8 +1,0 @@
-[package]
-name = "shader-slang-src-docker"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-repository.workspace = true
-description = "Shader Slang 2026.21 source partition: docker"
-include = ["source.tar", "src/lib.rs"]

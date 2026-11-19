@@ -127,9 +127,9 @@ The script:
 1. Makes a shallow clone of the tag and recursively shallow-clones every
    submodule (Git with `core.longpaths=true` supports deep Windows paths).
 2. Deletes all `.git` directories and files.
-3. Creates suitably named `shader-slang-src-*` crates containing source
-   archives, recursively splitting directories above an 8 MiB compressed
-   threshold.
+3. Creates `shader-slang-src-core-*` and `shader-slang-src-external-*` crates,
+   recursively splitting directories above 9 MiB and then best-fit packing the
+   measured items into shared source archives.
 4. Regenerates the aggregator's exact-version dependencies and source list,
    and synchronizes both crates' generated `SLANG_VERSION` constants.
 5. Runs `cargo package` for every partition and rejects any `.crate` above
