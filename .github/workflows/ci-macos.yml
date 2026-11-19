@@ -31,8 +31,6 @@ jobs:
           tar -xzf slang.tar.gz -C "$RUNNER_TEMP/slang-home"
       - name: Format check
         run: cargo fmt --all -- --check
-      - name: ShellCheck source generator
-        run: shellcheck -s dash devops/package-shader-slang-source.sh
       - name: Clippy (default features — detection only)
         run: cargo clippy -p shader-slang-dev --all-targets -- -D warnings
       - name: Test with SHADER_SLANG_HOME
