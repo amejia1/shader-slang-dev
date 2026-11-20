@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Vendored shader-slang 2026.21 source and build artifacts"
+description = "Vendored shader-slang source and build artifacts"
 build = "build.rs"
 readme = "README.md"
 

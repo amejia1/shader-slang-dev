@@ -32,8 +32,7 @@ fn main() -> ExitCode {
     match shader_slang_dev::install_artifacts(&dest) {
         Ok(()) => {
             println!(
-                "installed shader-slang {} artifacts from {} to {}",
-                shader_slang_dev::SLANG_VERSION,
+                "installed shader-slang artifacts from {} to {}",
                 shader_slang_dev::artifact_root().display(),
                 dest.display()
             );

@@ -7,10 +7,13 @@
 //! 1. `$SHADER_SLANG_HOME` — an install prefix containing `bin/slangc`.
 //!    Authoritative: when set, it is used as-is.
 //! 2. Common per-OS install locations ([`common_locations`]). A location only
-//!    counts when it provides the pinned release ([`is_pinned_install_root`]).
+//!    counts when it is a complete install ([`is_complete_install_root`]).
 //!
 //! [`locate`] returns `None` when nothing is found and [`artifact_root`]
 //! panics with the searched locations. [`source`] reports the selected origin.
+//!
+//! The crate does not pin a shader-slang release; it locates whatever is
+//! installed. Run `slangc -version` to determine the version in use.
 //!
 //! # Vendored build (`vendored` feature)
 //!
@@ -40,16 +43,12 @@
 mod detect;
 #[cfg(feature = "vendored")]
 mod install;
-mod slang_version;
 #[cfg(feature = "vendored")]
 pub use install::install_artifacts;
 
 pub use detect::Location;
 
 use std::path::{Path, PathBuf};
-
-/// The shader-slang release this crate pins (`2026.21`, tag `v2026.21`).
-pub const SLANG_VERSION: &str = detect::SLANG_VERSION;
 
 /// Name of the environment variable that points at a shader-slang install
 /// prefix (a directory containing `bin/slangc`), whether it was built and
@@ -63,7 +62,7 @@ pub fn locate() -> Option<Location> {
     #[cfg(feature = "vendored")]
     {
         let root = shader_slang_src::artifact_root();
-        detect::is_pinned_install_root(&root).then_some(Location::Vendored(root))
+        detect::is_complete_install_root(&root).then_some(Location::Vendored(root))
     }
     #[cfg(not(feature = "vendored"))]
     {
@@ -88,13 +87,14 @@ pub fn is_install_root(path: &Path) -> bool {
     detect::is_install_root(path)
 }
 
-/// Whether `path` provides the pinned shader-slang release ([`SLANG_VERSION`]):
-/// an install prefix ([`is_install_root`]) that also carries the versioned
-/// standard-module tree `slang-standard-module-<SLANG_VERSION>` under `lib/`
-/// or `bin/`. Common locations and the `$OUT_DIR` build are only accepted
-/// when this holds.
-pub fn is_pinned_install_root(path: &Path) -> bool {
-    detect::is_pinned_install_root(path)
+/// Whether `path` is a complete shader-slang install: an install prefix
+/// ([`is_install_root`]) that also carries a versioned standard-module tree
+/// `slang-standard-module-<version>` (any release) under `lib/` or `bin/`.
+/// Common locations and the `$OUT_DIR` build are only accepted when this
+/// holds. Detection is version-agnostic; use `slangc -version` to determine
+/// the release in use.
+pub fn is_complete_install_root(path: &Path) -> bool {
+    detect::is_complete_install_root(path)
 }
 
 /// How the artifacts in use were obtained: `"home"`, `"system"`,
@@ -129,7 +129,7 @@ pub fn artifact_root() -> PathBuf {
             panic!(
                 "no shader-slang installation found (searched: {})\n\
                  set ${SHADER_SLANG_HOME_ENV_VAR} to an install prefix containing bin/slangc, \
-                 install shader-slang {SLANG_VERSION} into a common location, or enable the \
+                 install shader-slang into a common location, or enable the \
                  `vendored` feature to build the vendored source",
                 searched.join(", ")
             )
@@ -177,20 +177,28 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
-    /// Name of the loose standard-module tree directory (e.g.
-    /// `slang-standard-module-2026.21`).
-    fn standard_module_dir_name() -> String {
-        format!("slang-standard-module-{SLANG_VERSION}")
-    }
-
     /// The standard-module trees present under the artifact root: the
     /// install puts the tree in `lib/`, and source builds additionally keep
     /// a copy in `bin/` (the statically linked slangc resolves the tree
-    /// relative to its own executable).
+    /// relative to its own executable). Any release's tree is accepted.
     fn standard_module_dirs() -> Vec<PathBuf> {
-        let name = standard_module_dir_name();
-        let mut dirs = vec![lib_dir().join(&name), bin_dir().join(&name)];
-        dirs.retain(|dir| dir.is_dir());
+        let mut dirs = Vec::new();
+        for base in [lib_dir(), bin_dir()] {
+            let Ok(entries) = fs::read_dir(&base) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir()
+                    && entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("slang-standard-module-")
+                {
+                    dirs.push(path);
+                }
+            }
+        }
         dirs
     }
 

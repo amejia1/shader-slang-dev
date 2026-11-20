@@ -1,7 +1,7 @@
 # shader-slang-dev
 
 Rust crates for locating an installed [shader-slang](https://github.com/shader-slang/slang)
-`2026.21` toolchain or building that release entirely from vendored source.
+toolchain or building it entirely from vendored source.
 
 - **`shader-slang-dev`** exposes `PathBuf` accessors for `slangc`, other
   binaries, libraries, headers, and share data. Its optional `vendored`
@@ -20,12 +20,12 @@ runtime, in this order:
 1. **`$SHADER_SLANG_HOME`** — an install prefix containing `bin/slangc`.
    Authoritative: when set, it is used as-is:
    ```sh
-   export SHADER_SLANG_HOME=/opt/slang-2026.21-linux-x86_64
+   export SHADER_SLANG_HOME=/opt/slang-linux-x86_64
    ```
 2. **Common install locations**, per OS and CPU architecture (see
    `shader_slang_dev::common_locations()`). A location counts only when it
-   provides `bin/slangc` and the versioned standard-module tree
-   `slang-standard-module-2026.21` under `lib/` or `bin/`:
+   provides `bin/slangc` and a versioned standard-module tree
+   `slang-standard-module-<version>` (any release) under `lib/` or `bin/`:
    - Linux: `/usr/local`, `/usr`, `/opt/slang`, `/opt/shader-slang`,
      `/opt/slang-<arch>`, `/opt/slang-linux-<arch>` (the same two under
      `/usr/local`), `$HOME/.local`, `$HOME/slang`, `$HOME/slang-linux-<arch>`.
@@ -41,6 +41,9 @@ runtime, in this order:
 `locate()` returns `Location::Home`, `Location::System`, or `None`;
 `source()` reports `"home"`, `"system"`, or `"none"`. `artifact_root()`
 panics with the searched locations when no installation is found.
+
+The crate does not pin a shader-slang release: it locates whatever is
+installed. Run `slangc -version` to determine the version in use.
 
 To use a release tarball, download and extract it yourself, then set
 `SHADER_SLANG_HOME` or extract it into a common location. No distribution URL
@@ -65,7 +68,7 @@ let _include_dir = shader_slang_dev::include_dir();
 
 ## Building vendored source
 
-Enable `vendored` to build the pinned source instead of locating an installed
+Enable `vendored` to build the vendored source instead of locating an installed
 toolchain:
 
 ```toml
@@ -82,7 +85,7 @@ returns `"vendored"`.
 
 The CMake configuration uses a static compiler library, disables tests,
 examples, RHI, gfx, and the downloadable LLVM backend, and enables the glslang
-backend. The pinned numeric and full versions are supplied explicitly because
+backend. The release's numeric and full versions are supplied explicitly because
 Git metadata is absent. The build requires CMake >= 3.20 and a C/C++
 toolchain; Git is not required.
 
@@ -119,7 +122,7 @@ All Rust crates share `workspace.package.version` in the root `Cargo.toml`
 Run the POSIX shell generator with a release tag:
 
 ```sh
-devops/package-shader-slang-source.sh v2026.21
+devops/package-shader-slang-source.sh <release-tag>
 ```
 
 The script:
@@ -131,7 +134,7 @@ The script:
    recursively splitting directories above 9 MiB and then best-fit packing the
    measured items into shared source archives.
 4. Regenerates the aggregator's exact-version dependencies and source list,
-   and synchronizes both crates' generated `SLANG_VERSION` constants.
+   and the source crate's generated `SLANG_VERSION` constant.
 5. Runs `cargo package` for every partition and rejects any `.crate` above
    10 MiB.
 

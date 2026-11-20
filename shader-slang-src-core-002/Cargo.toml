@@ -4,5 +4,5 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Shader Slang 2026.21 source partition core-002"
+description = "Shader Slang source partition core-002"
 include = ["source.tar", "src/lib.rs"]

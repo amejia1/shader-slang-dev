@@ -7,7 +7,6 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 description = "Locate an installed shader-slang toolchain, or build the vendored source with the `vendored` feature"
-build = "build.rs"
 readme = "README.md"
 
 # By default this crate only locates an existing shader-slang installation at

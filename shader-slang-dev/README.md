@@ -1,7 +1,7 @@
 # shader-slang-dev
 
 Locates an installed [shader-slang](https://github.com/shader-slang/slang)
-`2026.21` toolchain, or builds the vendored source with the `vendored` feature.
+toolchain, or builds the vendored source with the `vendored` feature.
 
 Accessors include:
 
@@ -9,16 +9,19 @@ Accessors include:
 - `artifact_root()`, `bin_dir()`, `lib_dir()`, `include_dir()`, and `share_dir()`.
 - `locate()` and `source()` for the selected origin.
 - `shader_slang_home()`, `common_locations()`, `is_install_root()`, and
-  `is_pinned_install_root()` for installed-toolchain discovery.
-- `SLANG_VERSION` and `SHADER_SLANG_HOME_ENV_VAR` constants.
+  `is_complete_install_root()` for installed-toolchain discovery.
+- `SHADER_SLANG_HOME_ENV_VAR` constant.
 
 ## Default: installed toolchain
 
 The runtime lookup checks `$SHADER_SLANG_HOME` first, then common OS- and
 architecture-specific install locations. `SHADER_SLANG_HOME` is authoritative;
-common locations must contain `bin/slangc` and the pinned release's versioned
-standard-module tree. `locate()` returns `Location::Home` or
+common locations must contain `bin/slangc` and a versioned standard-module
+tree (any release). `locate()` returns `Location::Home` or
 `Location::System`, and `source()` returns `"home"` or `"system"`.
+
+The crate does not pin a shader-slang release; it locates whatever is
+installed. Run `slangc -version` to determine the version in use.
 
 Download and extract a release tarball yourself to use prebuilt artifacts,
 then set `SHADER_SLANG_HOME` to its root. The crate does not download source
