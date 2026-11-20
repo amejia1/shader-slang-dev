@@ -42,9 +42,17 @@ jobs:
           cargo test -p shader-slang-dev
 
   vendored:
-    name: vendored (aarch64)
+    name: vendored (${{ matrix.arch }})
     needs: test
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runs-on: macos-15-intel
+          - arch: aarch64
+            runs-on: macos-latest
+    runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 360
     steps:
       - name: Check out repository

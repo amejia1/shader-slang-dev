@@ -44,9 +44,17 @@ jobs:
           cargo test -p shader-slang-dev
 
   vendored:
-    name: vendored (x86_64)
+    name: vendored (${{ matrix.arch }})
     needs: test
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runs-on: ubuntu-latest
+          - arch: aarch64
+            runs-on: ubuntu-26.04-arm
+    runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 360
     steps:
       - name: Check out repository
