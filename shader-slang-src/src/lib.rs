@@ -2,12 +2,6 @@
 
 use std::path::{Path, PathBuf};
 
-#[path = "slang_version.rs"]
-mod slang_version;
-
-/// The shader-slang release built by this crate.
-pub const SLANG_VERSION: &str = slang_version::SLANG_VERSION;
-
 /// Root of the installed shader-slang artifacts in this crate's `$OUT_DIR`.
 ///
 /// The directory contains `bin/`, `lib/`, `include/`, and `share/`. It is
