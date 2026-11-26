@@ -13,9 +13,9 @@ readme = "README.md"
 [build-dependencies]
 cmake = "0.1"
 tar = "0.4"
-shader-slang-src-core-001 = { path = "../shader-slang-src-core-001", version = "=1.0.0" }
-shader-slang-src-core-002 = { path = "../shader-slang-src-core-002", version = "=1.0.0" }
-shader-slang-src-external-001 = { path = "../shader-slang-src-external-001", version = "=1.0.0" }
-shader-slang-src-external-002 = { path = "../shader-slang-src-external-002", version = "=1.0.0" }
-shader-slang-src-external-003 = { path = "../shader-slang-src-external-003", version = "=1.0.0" }
-shader-slang-src-external-004 = { path = "../shader-slang-src-external-004", version = "=1.0.0" }
+shader-slang-src-core-001 = { path = "../shader-slang-src-core-001", version = "=1.0.1" }
+shader-slang-src-core-002 = { path = "../shader-slang-src-core-002", version = "=1.0.1" }
+shader-slang-src-external-001 = { path = "../shader-slang-src-external-001", version = "=1.0.1" }
+shader-slang-src-external-002 = { path = "../shader-slang-src-external-002", version = "=1.0.1" }
+shader-slang-src-external-003 = { path = "../shader-slang-src-external-003", version = "=1.0.1" }
+shader-slang-src-external-004 = { path = "../shader-slang-src-external-004", version = "=1.0.1" }

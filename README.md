@@ -115,14 +115,16 @@ export SHADER_SLANG_HOME=/opt/slang
 
 ## Updating the vendored release
 
-All Rust crates share `workspace.package.version` in the root `Cargo.toml`
-(initially `1.0.0`). Change that single value before packaging a new set.
+All Rust crates share `workspace.package.version` in the root `Cargo.toml`.
+Change that single value before packaging a new set.
 `shader-slang-src` requires every partition at that exact version.
 
-Run the POSIX shell generator with a release tag:
+Run the POSIX shell generator. The packaged release is the hard-coded
+`tag` variable near the top of the script; change it to package a
+different release:
 
 ```sh
-devops/package-shader-slang-source.sh <release-tag>
+devops/package-shader-slang-source.sh
 ```
 
 The script:
