@@ -10,7 +10,8 @@ toolchain or building it entirely from vendored source.
   all submodules, and installs it into its `$OUT_DIR/slang-artifact`.
 - **`shader-slang-src-*`** are the source-partition crates. Every partition
   packages below the crates.io 10 MiB limit. The aggregator depends on all of
-  them with the same exact crate version.
+  them with the same exact crate version. Each partition's `source.tar` is
+  stored in [Git LFS](https://git-lfs.github.com/).
 
 ## Locating an installation (default)
 
@@ -150,6 +151,13 @@ Validate the script with:
 ```sh
 shellcheck -s dash devops/package-shader-slang-source.sh
 ```
+
+The partition `source.tar` files are tracked with [Git LFS](https://git-lfs.github.com/)
+by the `shader-slang-src-*/source.tar` pattern in `.gitattributes`. Cloning the
+repository requires `git-lfs` (e.g. `git lfs install` before or after cloning)
+so `vendored` builds find real archives instead of pointer files. The pattern
+covers every partition the generator creates, so newly packaged partitions are
+tracked automatically.
 
 Publish partition crates before `shader-slang-src`, and publish
 `shader-slang-src` before `shader-slang-dev`, so registry dependencies resolve
