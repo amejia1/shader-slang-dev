@@ -13,10 +13,10 @@ jobs:
         include:
           - arch: x86_64
             runs-on: macos-15-intel
-            dist-url: https://github.com/shader-slang/slang/releases/download/v2026.21/slang-2026.21-macos-x86_64.tar.gz
+            dist-url: https://github.com/shader-slang/slang/releases/download/v2026.22/slang-2026.22-macos-x86_64.tar.gz
           - arch: aarch64
             runs-on: macos-latest
-            dist-url: https://github.com/shader-slang/slang/releases/download/v2026.21/slang-2026.21-macos-aarch64.tar.gz
+            dist-url: https://github.com/shader-slang/slang/releases/download/v2026.22/slang-2026.22-macos-aarch64.tar.gz
     runs-on: ${{ matrix.runs-on }}
     steps:
       - name: Check out repository

@@ -15,7 +15,7 @@ if [ "$#" -gt 0 ]; then
     exit 2
 fi
 
-tag=v2026.21
+tag=v2026.22
 release=${tag#v}
 
 script_dir=$(CDPATH='' cd "$(dirname "$0")" && pwd)

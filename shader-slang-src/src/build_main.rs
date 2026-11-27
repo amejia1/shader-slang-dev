@@ -31,6 +31,18 @@ pub fn main(source_archives: &[&str], slang_version: &str) {
                 )
             });
         }
+        // A CMake tree configured from a different release keeps
+        // version-specific outputs (standard-module directories, generated
+        // headers) that an incremental reconfigure does not reliably
+        // regenerate, so rebuild from a clean tree.
+        if build_dir.exists() {
+            fs::remove_dir_all(&build_dir).unwrap_or_else(|e| {
+                panic!(
+                    "failed to remove stale CMake build dir {}: {e}",
+                    build_dir.display()
+                )
+            });
+        }
         reassemble_sources(source_archives, &source_dir);
         build_slang(
             &source_dir,
